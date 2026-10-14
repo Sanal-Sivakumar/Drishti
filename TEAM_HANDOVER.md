@@ -114,3 +114,17 @@ Ensure code is strictly modular, non-blocking, headless-compatible, thoroughly t
 and optimized for resource-constrained edge hardware."
 ```
 
+---
+
+## 6. Current Implementation Status & Handover Ledger
+
+As of the current milestone, the engineering baseline stands as follows:
+
+| Subsystem / Phase | Current State | Verification Passed |
+| :--- | :--- | :--- |
+| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2 physical camera + ALSA direct speaker output | `tests/unit/test_hal.py` (4/4 PASSED) |
+| **Phase 1: Fast Perception** | 3D Spatial Audio (ITD + ILD), Ray-Cone Depth Fusion, INR Banknote Classifier, FastPerceptionPipeline | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (9/9 PASSED) |
+| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0`), and laptop microphone (`plughw:1,0`) tested live | `scripts/run_phase1_perception.py --camera real --audio real` |
+| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) | `.github/workflows/ci.yml` |
+| **Next Tasks (Phase 2)** | Multilingual Indic OCR (Tesseract / PaddleOCR with NFC normalization) and local VLM integration (SmolVLM / Moondream2) | Scheduled |
+

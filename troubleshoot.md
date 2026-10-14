@@ -66,6 +66,25 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 2.2 ALSA Device Direct Selection (`audio open error: Host is down`)
+
+#### Symptom: `aplay -D default` fails with `audio open error: Host is down`
+- **Root Cause**:
+  On modern Linux desktops running PipeWire or PulseAudio, routing audio through `default` requires connecting to the user's active session daemon socket. If executed from background daemons or containers lacking session variables, the virtual sound server connection is refused.
+- **Diagnostic Command**:
+  ```bash
+  # List physical playback cards and subdevices
+  aplay -l
+  ```
+- **Fix**:
+  1. Target the physical card and device directly using the hardware plugin interface:
+     ```bash
+     aplay -D plughw:1,0 -r 44100 -f S16_LE -c 2 test.wav
+     ```
+  2. `ALSAAudioSink` automatically defaults to `plughw:1,0` (Card 1 Device 0) with automatic sample-rate resampling.
+
+---
+
 ## 3. Deep Learning Runtime & Quantization
 
 ### 3.1 ONNX Runtime Execution Provider Mismatch

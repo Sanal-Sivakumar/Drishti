@@ -217,8 +217,30 @@ The entire test suite runs completely headless without requiring physical camera
 pytest tests/ -v
 ```
 
+### 4. Running the Live Fast Perception Pipeline
+You can run the end-to-end fast perception loop either with synthetic simulation or on physical hardware:
+
+```bash
+# Option A: Headless Synthetic Benchmark (Zero hardware dependencies)
+python3 scripts/run_phase1_perception.py --frames 10 --benchmark-frames 50
+
+# Option B: Real Laptop Hardware (Webcam /dev/video0 + Speakers plughw:1,0)
+python3 scripts/run_phase1_perception.py --camera real --audio real --frames 10
+```
+
 ---
 
-## 8. License
+## 8. Implementation Progress & Engineering Milestones
+
+| Phase | Milestone Description | Status | Verification Checkpoint |
+| :--- | :--- | :--- | :--- |
+| **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- Deterministic synthetic mock generators for headless simulation<br>- Hardware and pipeline YAML configuration schemas | ✅ **Completed** | **Checkpoint 0**: All 4 HAL drivers verified via `test_hal.py`. |
+| **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer (up to 655 $\mu$s delay)<br>- Camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier<br>- V4L2 live webcam streaming and ALSA direct speaker output | ✅ **Completed** | **Checkpoint 1**: 1.28 ms mean PC cycle time ($> 700 \text{ FPS}$), verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
+| **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Local neural TTS audio vocalization (Piper / MMS-TTS) | 🔄 **In Progress** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech generation. |
+| **Phase 3** | **Edge Privacy, Caregiver Telemetry & Companion App**<br>- Local Gaussian face and PII redaction filter<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1<br>- Emergency distress notification pipeline | ⏳ **Scheduled** | **Checkpoint 3**: End-to-end multi-threaded pipeline stress tests. |
+
+---
+
+## 9. License
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for complete terms.
