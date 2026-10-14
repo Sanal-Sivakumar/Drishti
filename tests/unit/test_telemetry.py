@@ -34,3 +34,4 @@ def test_publish_emergency_alert():
     assert alert["status"] == "REQUIRES_CAREGIVER_ATTENTION"
     # Ensure buffered in memory
     assert len(client.buffered_telemetry) >= 1
+

@@ -69,3 +69,32 @@ def test_pipeline_run_loop(master_pipeline):
     """Verify master pipeline runs for bounded cycles and shuts down cleanly."""
     master_pipeline.run_loop(max_cycles=3)
     assert master_pipeline.cycle_count >= 3
+
+
+def test_pipeline_continuous_currency_mode():
+    """Verify master pipeline executes continuous currency detection without tactile triggers."""
+    cam = SyntheticCameraSource(width=320, height=240, fps=30)
+    sensor = SyntheticDistanceSensor(base_distance_m=1.65)
+    trigger = SyntheticTriggerInput()
+    audio = HeadlessAudioRecorder()
+    telemetry = TelemetryClient(device_id="continuous-curr-test")
+
+    pipeline = DrishtiMasterPipeline(
+        camera=cam,
+        distance_sensor=sensor,
+        trigger_input=trigger,
+        audio_sink=audio,
+        telemetry_client=telemetry,
+        continuous_currency=True,
+        currency_interval=1,  # evaluate on every cycle for testing
+    )
+
+    # Step through cycles - continuous currency runs automatically
+    res = pipeline.step()
+    assert "fast_perception" in res
+    assert res["fast_perception"]["success"] is True
+    # Verify that continuous currency evaluated
+    assert pipeline.continuous_currency is True
+    pipeline.shutdown()
+
+

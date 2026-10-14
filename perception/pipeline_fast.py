@@ -37,6 +37,7 @@ class FastPerceptionPipeline:
 
         # Start active range sensing
         self.distance_sensor.start_ranging()
+        self.last_frame: Optional[np.ndarray] = None
 
     def step(self) -> Dict[str, Any]:
         """Execute a single perception, fusion, and spatial audio cycle.
@@ -54,6 +55,8 @@ class FastPerceptionPipeline:
 
         if not success or frame is None:
             return {"success": False, "error": "Camera frame acquisition failed"}
+
+        self.last_frame = frame
 
         # 2. Acquire ToF Distance Reading
         t0 = time.perf_counter()

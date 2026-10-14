@@ -46,3 +46,4 @@ def test_anonymize_frame_with_box():
     assert res["faces_redacted"] >= 1
     assert "image" in res
     assert res["image"].shape == frame.shape
+

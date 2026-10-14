@@ -248,6 +248,39 @@ python3 scripts/run_phase3_full_system.py --camera synthetic
 python3 scripts/run_phase3_full_system.py --camera real --audio real
 ```
 
+### 7. Running Production Autonomous Wearable (Continuous Live Mode)
+Runs continuously with active 3D spatial obstacle sonification, automatic banknote detection, and live interactive controls:
+
+```bash
+# On Laptop (uses webcam /dev/video0, speakers plughw:1,0, and interactive terminal controls)
+python3 scripts/run_live_wearable.py --hardware laptop
+
+# On Raspberry Pi 5 (Camera Module 3, VL53L1X ToF, GPIO 17/27 buttons, and bone conduction)
+python3 scripts/run_live_wearable.py --hardware rpi
+```
+
+#### Interactive Controls in Live Terminal Mode:
+- **Automatic Note Detection**: Hold any Indian Rupee banknote (₹10, ₹20, ₹50, ₹100, ₹200, ₹500) up to the camera—it announces the denomination with debouncing.
+- **Type `N` + Enter**: Triggers local VLM scene narration of what lies ahead.
+- **Type `C` + Enter**: Triggers manual banknote / Multilingual Indic OCR reading.
+- **Type `Q` + Enter** (or `Ctrl+C`): Gracefully powers down the wearable system.
+
+#### Raspberry Pi Autonomous Boot Deployment (systemd):
+To launch Drishti automatically as an autonomous background appliance whenever the wearable battery pack powers on:
+
+```bash
+# 1. Copy unit service to systemd directory
+sudo cp config/drishti.service /etc/systemd/system/
+
+# 2. Reload daemon and enable auto-start on boot
+sudo systemctl daemon-reload
+sudo systemctl enable --now drishti.service
+
+# 3. Check live service status and journal logs
+systemctl status drishti.service
+journalctl -u drishti.service -f
+```
+
 ---
 
 ## 8. Implementation Progress & Engineering Milestones

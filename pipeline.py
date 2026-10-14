@@ -35,12 +35,18 @@ class DrishtiMasterPipeline:
         trigger_input: BaseTriggerInput,
         audio_sink: BaseAudioSink,
         telemetry_client: Optional[TelemetryClient] = None,
+        continuous_currency: bool = False,
+        currency_interval: int = 10,
+        currency_cooldown_s: float = 4.0,
     ) -> None:
         self.camera = camera
         self.distance_sensor = distance_sensor
         self.trigger_input = trigger_input
         self.audio_sink = audio_sink
         self.telemetry = telemetry_client or TelemetryClient()
+        self.continuous_currency = continuous_currency
+        self.currency_interval = currency_interval
+        self.currency_cooldown_s = currency_cooldown_s
 
         # Core Engines
         self.fast_pipeline = FastPerceptionPipeline(
@@ -60,6 +66,8 @@ class DrishtiMasterPipeline:
         self.lock = threading.Lock()
         self.cycle_count = 0
         self.last_heartbeat_time = 0.0
+        self.last_currency_announcement_time = 0.0
+        self.last_currency_denom: Optional[int] = None
 
     def step(self) -> Dict[str, Any]:
         """Execute a single synchronized step across perception and trigger inputs.
@@ -73,12 +81,41 @@ class DrishtiMasterPipeline:
         fast_res = self.fast_pipeline.step()
         cycle_result["fast_perception"] = fast_res
 
-        # 2. Poll Tactile Triggers (Non-blocking)
+        # 2. Continuous Currency Detection (Automatic note recognition)
+        if self.continuous_currency and (self.cycle_count % self.currency_interval == 0):
+            frame = getattr(self.fast_pipeline, "last_frame", None)
+            if frame is None:
+                _, frame = self.camera.read_frame()
+
+            if frame is not None and frame.size > 0:
+                h, w = frame.shape[:2]
+                # Center crop where user holds the banknote
+                y1, y2 = int(h * 0.15), int(h * 0.85)
+                x1, x2 = int(w * 0.15), int(w * 0.85)
+                crop = frame[y1:y2, x1:x2]
+                curr = self.currency_classifier.classify_banknote(crop)
+                denom = curr.get("denomination")
+                now = time.time()
+                if denom is not None:
+                    if (now - self.last_currency_announcement_time > self.currency_cooldown_s) or (denom != self.last_currency_denom):
+                        spoken = curr["spoken_name"]
+                        self.speech_service.speak(spoken, play_audio=True)
+                        self.last_currency_announcement_time = now
+                        self.last_currency_denom = denom
+                        cycle_result["continuous_currency"] = curr
+                else:
+                    if now - self.last_currency_announcement_time > self.currency_cooldown_s:
+                        self.last_currency_denom = None
+
+        # 3. Poll Tactile Triggers (Non-blocking)
         # Button 1: Scene Narration (VLM)
         if self.trigger_input.poll_trigger(button_id=1):
             cycle_result["event"] = "SCENE_NARRATION_TRIGGERED"
-            success, frame = self.camera.read_frame()
-            if success and frame is not None:
+            frame = getattr(self.fast_pipeline, "last_frame", None)
+            if frame is None:
+                _, frame = self.camera.read_frame()
+
+            if frame is not None:
                 # Anonymize frame locally
                 redacted = self.anonymizer.anonymize_frame(frame)
                 # Query VLM with perception context
@@ -97,10 +134,14 @@ class DrishtiMasterPipeline:
         # Button 2: Currency Recognition & Multilingual OCR
         elif self.trigger_input.poll_trigger(button_id=2):
             cycle_result["event"] = "READING_OR_CURRENCY_TRIGGERED"
-            success, frame = self.camera.read_frame()
-            if success and frame is not None:
+            frame = getattr(self.fast_pipeline, "last_frame", None)
+            if frame is None:
+                _, frame = self.camera.read_frame()
+
+            if frame is not None:
                 # Check for Indian Rupee banknote first
                 currency_res = self.currency_classifier.classify_banknote(frame)
+
                 if currency_res["denomination"] is not None:
                     announcement = currency_res["spoken_name"]
                     cycle_result["currency"] = currency_res
@@ -139,3 +180,4 @@ class DrishtiMasterPipeline:
         self.is_running = False
         self.fast_pipeline.shutdown()
         self.telemetry.disconnect()
+

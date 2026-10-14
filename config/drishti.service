@@ -1,0 +1,18 @@
+[Unit]
+Description=Drishti Assistive Wearable Autonomous Edge Service
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/Drishti
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/Drishti/.venv/bin/python3 /home/pi/Drishti/scripts/run_live_wearable.py --hardware rpi
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

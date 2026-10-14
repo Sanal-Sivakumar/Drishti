@@ -150,3 +150,4 @@ class TelemetryClient:
             except Exception:
                 pass
             self.is_connected = False
+
