@@ -156,3 +156,4 @@ class FastPerceptionPipeline:
         self.distance_sensor.stop_ranging()
         self.camera.release()
         self.audio_sink.stop()
+

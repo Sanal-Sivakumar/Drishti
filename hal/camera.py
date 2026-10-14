@@ -135,3 +135,72 @@ class OpenCVCameraSource(BaseCameraSource):
             "is_opened": self.cap.isOpened() if self.cap else False,
         }
 
+
+class V4L2CameraSource(BaseCameraSource):
+    """Direct V4L2 raw video stream driver for Linux/laptop webcams without OpenCV dependency."""
+
+    def __init__(self, device_path: str = "/dev/video0", width: int = 640, height: int = 480, fps: int = 30) -> None:
+        import subprocess
+        self.device_path = device_path
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.frame_bytes = width * height * 3
+        self.proc = None
+        self.is_open = False
+
+        cmd = [
+            "ffmpeg", "-loglevel", "quiet",
+            "-f", "v4l2",
+            "-video_size", f"{width}x{height}",
+            "-i", device_path,
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-r", str(fps),
+            "-"
+        ]
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=self.frame_bytes * 2
+            )
+            self.is_open = True
+        except Exception:
+            self.proc = None
+            self.is_open = False
+
+    def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        if not self.is_open or self.proc is None or self.proc.stdout is None:
+            return False, None
+        try:
+            raw = self.proc.stdout.read(self.frame_bytes)
+            if len(raw) == self.frame_bytes:
+                frame = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3))
+                return True, frame
+            return False, None
+        except Exception:
+            return False, None
+
+    def release(self) -> None:
+        self.is_open = False
+        if self.proc is not None:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=0.5)
+            except Exception:
+                pass
+            self.proc = None
+
+    def get_properties(self) -> Dict[str, Any]:
+        return {
+            "backend": "v4l2_ffmpeg",
+            "device_path": self.device_path,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "is_open": self.is_open,
+        }
+
+

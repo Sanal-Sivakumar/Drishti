@@ -53,3 +53,4 @@ def test_fast_perception_latency_budget():
     assert benchmark_stats["achieved_fps"] >= 30.0
 
     pipeline.shutdown()
+

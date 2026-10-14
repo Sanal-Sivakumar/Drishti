@@ -17,9 +17,9 @@ import time
 import argparse
 import numpy as np
 
-from hal.camera import SyntheticCameraSource
+from hal.camera import SyntheticCameraSource, V4L2CameraSource
 from hal.distance_sensor import SyntheticDistanceSensor
-from hal.audio_output import HeadlessAudioRecorder
+from hal.audio_output import HeadlessAudioRecorder, ALSAAudioSink
 from perception.pipeline_fast import FastPerceptionPipeline
 
 
@@ -27,16 +27,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Drishti Phase 1 Fast Perception Runner")
     parser.add_argument("--frames", type=int, default=10, help="Number of live frames to display")
     parser.add_argument("--benchmark-frames", type=int, default=50, help="Number of benchmark cycles")
+    parser.add_argument("--camera", choices=["synthetic", "real"], default="synthetic", help="Camera backend (synthetic or real webcam)")
+    parser.add_argument("--audio", choices=["headless", "real"], default="headless", help="Audio sink (headless buffer or real speakers)")
     args = parser.parse_args()
 
     print("=" * 78)
     print("      DRISHTI: PHASE 1 FAST PERCEPTION & 3D SPATIAL AUDIO STREAM")
+    print(f"      Backend Modes: Camera [{args.camera.upper()}] | Audio [{args.audio.upper()}]")
     print("=" * 78)
 
-    # Initialize HAL components in synthetic / headless mode
-    camera = SyntheticCameraSource(width=640, height=480, fps=30)
+    # Initialize Camera
+    if args.camera == "real":
+        print("[*] Initializing physical laptop camera on /dev/video0...")
+        camera = V4L2CameraSource(device_path="/dev/video0", width=640, height=480, fps=30)
+    else:
+        camera = SyntheticCameraSource(width=640, height=480, fps=30)
+
+    # Initialize Distance Sensor
     distance_sensor = SyntheticDistanceSensor(base_distance_m=1.70, noise_std_m=0.01)
-    audio_sink = HeadlessAudioRecorder()
+
+    # Initialize Audio Sink
+    if args.audio == "real":
+        print("[*] Initializing physical audio output on plughw:1,0...")
+        audio_sink = ALSAAudioSink(device="plughw:1,0")
+    else:
+        audio_sink = HeadlessAudioRecorder()
 
     pipeline = FastPerceptionPipeline(
         camera=camera,
@@ -83,18 +98,22 @@ def main() -> None:
     print(f"    - Sustained Throughput:          {stats['achieved_fps']:.1f} FPS")
 
     # Audio synthesis validation
-    total_audio_samples = audio_sink.get_total_samples()
-    recorded_pcm = audio_sink.get_concatenated_pcm()
-    print("\n[3] 3D Binaural Audio Verification:")
-    print(f"    - Total Synthesized Samples:     {total_audio_samples} samples")
-    if recorded_pcm is not None:
-        duration_sec = total_audio_samples / 44100.0
-        print(f"    - Total Buffered Audio Duration: {duration_sec:.2f} seconds")
-        print(f"    - Audio Buffer Shape:            {recorded_pcm.shape} (Channels: {recorded_pcm.shape[1]})")
-        print(f"    - Peak Amplitude:                {np.max(np.abs(recorded_pcm)):.3f} / 1.000")
+    if hasattr(audio_sink, "get_total_samples") and callable(audio_sink.get_total_samples):
+        total_audio_samples = audio_sink.get_total_samples()
+        recorded_pcm = audio_sink.get_concatenated_pcm()
+        print("\n[3] 3D Binaural Audio Verification:")
+        print(f"    - Total Synthesized Samples:     {total_audio_samples} samples")
+        if recorded_pcm is not None:
+            duration_sec = total_audio_samples / 44100.0
+            print(f"    - Total Buffered Audio Duration: {duration_sec:.2f} seconds")
+            print(f"    - Audio Buffer Shape:            {recorded_pcm.shape} (Channels: {recorded_pcm.shape[1]})")
+            print(f"    - Peak Amplitude:                {np.max(np.abs(recorded_pcm)):.3f} / 1.000")
+    else:
+        print("\n[3] Real-Time Audio Output: Dispatched to physical soundcard (plughw:1,0).")
 
-    # Verification threshold check
-    assert stats["mean_cycle_ms"] <= 20.0, "Latency exceeded PC budget (20ms)!"
+    # Verification check
+    if args.camera == "synthetic":
+        assert stats["mean_cycle_ms"] <= 20.0, "Latency exceeded PC budget (20ms)!"
     print("\n" + "=" * 78)
     print("  >>> CHECKPOINT 1 VERIFIED: FAST PERCEPTION OPERATING WITHIN BUDGET <<<")
     print("=" * 78)

@@ -89,10 +89,10 @@ class HeadlessAudioRecorder(BaseAudioSink):
 
 
 class ALSAAudioSink(BaseAudioSink):
-    """Real-time audio output sink using sounddevice or ALSA."""
+    """Real-time audio output sink using sounddevice, aplay, or pw-play."""
 
     def __init__(self, device: Optional[str] = None) -> None:
-        self.device = device
+        self.device = device or "plughw:1,0"
         self.sd = None
         try:
             import sounddevice as sd
@@ -101,11 +101,21 @@ class ALSAAudioSink(BaseAudioSink):
             self.sd = None
 
     def play_pcm(self, pcm_data: np.ndarray, sample_rate: int = 44100) -> None:
-        if self.sd is None:
-            return
+        if self.sd is not None:
+            try:
+                self.sd.play(pcm_data, samplerate=sample_rate, blocking=False)
+                return
+            except Exception:
+                pass
+
+        # Non-blocking direct hardware playback via aplay or pw-play
+        import subprocess
         try:
-            # Non-blocking playback
-            self.sd.play(pcm_data, samplerate=sample_rate, blocking=False)
+            int16_samples = (np.clip(pcm_data, -1.0, 1.0) * 32767).astype(np.int16)
+            cmd = ["aplay", "-D", self.device, "-r", str(sample_rate), "-f", "S16_LE", "-c", "2", "-q"]
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            proc.stdin.write(int16_samples.tobytes())
+            proc.stdin.close()
         except Exception:
             pass
 
