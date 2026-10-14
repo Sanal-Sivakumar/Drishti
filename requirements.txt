@@ -1,0 +1,15 @@
+# Core Numerical & Computer Vision
+numpy>=1.24.0
+Pillow>=10.0.0
+pyyaml>=6.0.0
+
+# Testing & Quality
+pytest>=8.0.0
+
+# Optional Hardware & Acceleration (installed when deploying to target hardware / CUDA)
+# opencv-python-headless>=4.8.0
+# onnxruntime>=1.16.0
+# pytesseract>=0.3.10
+# paho-mqtt>=1.6.1
+# sounddevice>=0.4.6
+

@@ -1,0 +1,31 @@
+# Hardware Configuration: Target Raspberry Pi 5 Edge Device
+
+camera:
+  backend: "libcamera"         # Camera Module 3 CSI (IMX708)
+  sensor_name: "imx708"
+  csi_port: 0
+  capture_width: 640
+  capture_height: 480
+  fps: 30
+
+distance_sensor:
+  backend: "vl53l1x"           # STMicroelectronics VL53L1X via I2C
+  i2c_bus: 1
+  i2c_address: 0x29
+  timing_budget_ms: 33
+  distance_mode: "long"        # Options: "short" (up to 1.3m), "long" (up to 4.0m)
+
+trigger_input:
+  backend: "gpio"
+  pin_button_narration: 17     # Header Pin 11 (GPIO 17)
+  pin_button_currency_ocr: 27  # Header Pin 13 (GPIO 27)
+  pull_mode: "up"
+  debounce_ms: 50
+
+audio_output:
+  backend: "alsa"
+  device_name: "default"
+  sample_rate_hz: 44100
+  channels: 2
+  buffer_frames: 1024
+

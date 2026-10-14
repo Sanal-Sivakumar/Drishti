@@ -1,0 +1,92 @@
+# Drishti Pipeline Configuration Schema
+
+pipeline:
+  target_fps: 30
+  frame_width: 640
+  frame_height: 480
+  headless: true
+
+perception:
+  detector:
+    model_family: "yolo_nano"
+    confidence_threshold: 0.40
+    iou_threshold: 0.45
+    target_classes:
+      - person
+      - chair
+      - door
+      - stairs
+      - table
+      - car
+      - bicycle
+  
+  tof_fusion:
+    cone_half_angle_deg: 13.5   # VL53L1X 27 degree full cone
+    min_distance_m: 0.05
+    max_distance_m: 4.00
+    camera_fov_h_deg: 120.0     # Camera Module 3 Wide
+    camera_focal_length_px: 500.0
+    principal_point_x: 320.0
+    principal_point_y: 240.0
+    class_priors_m:
+      person: 1.70
+      chair: 0.85
+      door: 2.00
+      table: 0.75
+      car: 1.50
+      stairs: 1.20
+
+  currency:
+    confidence_threshold: 0.75
+    supported_denominations: [10, 20, 50, 100, 200, 500]
+
+  spatial_audio:
+    sample_rate_hz: 44100
+    head_radius_m: 0.0875       # Woodworth spherical head model radius
+    speed_of_sound_mps: 343.0
+    caution_pitch_hz: 440.0     # Musical note A4
+    warning_pitch_hz: 660.0     # Musical note E5
+    critical_pitch_hz: 880.0    # Musical note A5
+    pulse_min_rate_hz: 1.0      # At 4.0 meters
+    pulse_max_rate_hz: 10.0     # At 0.5 meters
+    ild_attenuation_db_per_rad: 12.0
+
+cognitive:
+  ocr:
+    languages:
+      - eng
+      - hin
+      - tam
+      - mal
+    min_confidence: 60.0
+    unicode_normalization: "NFC"
+
+  vlm:
+    model_name: "smolvlm-500m"
+    max_output_tokens: 64
+    temperature: 0.2
+    prompt_template: >
+      You are Drishti, an assistive navigator for a visually impaired user.
+      Rules:
+      1. State immediate obstacles and their metric distance first.
+      2. Specify directional orientation (left, right, straight ahead).
+      3. Warn of physical hazards (steps, drop-offs, low overheads).
+      4. Limit response to 2 crisp, actionable sentences.
+
+  tts:
+    engine: "piper"
+    default_language: "en_US"
+    speaking_rate: 1.15
+
+safety:
+  privacy:
+    enable_face_blur: true
+    blur_kernel_size: 15
+    blur_sigma: 7.0
+  telemetry:
+    broker_host: "localhost"
+    broker_port: 8883
+    use_tls: true
+    qos: 1
+    heartbeat_interval_s: 10
+

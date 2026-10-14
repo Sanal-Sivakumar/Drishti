@@ -1,0 +1,22 @@
+# Hardware Configuration: Linux Workstation / Development Environment
+
+camera:
+  backend: "synthetic"         # Options: "synthetic", "opencv", "v4l2"
+  device_index: 0
+  capture_width: 640
+  capture_height: 480
+  fps: 30
+
+distance_sensor:
+  backend: "synthetic"         # Options: "synthetic", "vl53l1x"
+  default_distance_m: 1.50
+  noise_std_m: 0.02
+
+trigger_input:
+  backend: "synthetic"         # Options: "synthetic", "keyboard", "gpio"
+
+audio_output:
+  backend: "headless"          # Options: "headless", "alsa", "pulse"
+  sample_rate_hz: 44100
+  channels: 2
+

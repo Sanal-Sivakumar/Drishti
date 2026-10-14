@@ -95,6 +95,20 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 3.3 NumPy Scalar Boolean Comparison (`np.False_ is False`)
+
+#### Symptom: Unit tests fail on assertions like `assert fuser.is_in_tof_cone(...) is False`
+- **Root Cause**:
+  In Python, the `is` keyword tests for memory object identity against the built-in `False` singleton. NumPy boolean operations return scalar instances of type `numpy.bool_` (`np.False_`), which do not share memory identity with Python's built-in `False`.
+- **Diagnostic & Fix**:
+  1. In module returns, always cast boolean logic expressions to standard Python `bool`:
+     ```python
+     return bool(overlap_left <= overlap_right)
+     ```
+  2. In test assertions, use equality (`== False`) or truthiness checking (`assert not result`) rather than singleton identity (`is False`).
+
+---
+
 ## 4. Multilingual OCR & Indic Script Rendering
 
 ### 4.1 Missing Indic Language Models / Ligature Glitches
