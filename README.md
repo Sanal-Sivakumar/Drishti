@@ -3,6 +3,7 @@
 > **An offline-first, low-latency assistive wearable architecture engineered for visually impaired individuals, delivering real-time spatial awareness, multilingual reading, currency identification, and contextual scene narration on edge hardware.**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![CI Pipeline](https://github.com/Sanal-Sivakumar/Drishti/actions/workflows/ci.yml/badge.svg)](https://github.com/Sanal-Sivakumar/Drishti/actions/workflows/ci.yml)
 [![Target Platform](https://img.shields.io/badge/Hardware-Raspberry%20Pi%205-red.svg)](https://www.raspberrypi.com/products/raspberry-pi-5/)
 [![AI Accelerator](https://img.shields.io/badge/NPU-Hailo--8L%20(13%20TOPS)-brightgreen.svg)](https://www.raspberrypi.com/products/raspberry-pi-ai-kit/)
 [![Offline Capability](https://img.shields.io/badge/Compute-100%25%20Offline-success.svg)](#1-core-philosophy--what-drishti-does)
