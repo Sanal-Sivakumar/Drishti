@@ -124,7 +124,8 @@ As of the current milestone, the engineering baseline stands as follows:
 | :--- | :--- | :--- |
 | **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2 physical camera + ALSA direct speaker output | `tests/unit/test_hal.py` (4/4 PASSED) |
 | **Phase 1: Fast Perception** | 3D Spatial Audio (ITD + ILD), Ray-Cone Depth Fusion, INR Banknote Classifier, FastPerceptionPipeline | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (9/9 PASSED) |
-| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0`), and laptop microphone (`plughw:1,0`) tested live | `scripts/run_phase1_perception.py --camera real --audio real` |
-| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) | `.github/workflows/ci.yml` |
-| **Next Tasks (Phase 2)** | Multilingual Indic OCR (Tesseract / PaddleOCR with NFC normalization) and local VLM integration (SmolVLM / Moondream2) | Scheduled |
+| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), SmolVLM/Moondream2 Narrator, Local Speech Synthesis | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (9/9 PASSED) |
+| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0` / `spd-say`), and laptop microphone (`plughw:1,0`) tested live | `scripts/run_phase1_perception.py`, `scripts/run_phase2_cognitive.py` |
+| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) | `.github/workflows/ci.yml` (24/24 Tests Passing) |
+| **Next Tasks (Phase 3)** | Edge Privacy (Gaussian face redaction), Mosquitto MQTT telemetry (TLS 1.3, QoS 1), and Master Pipeline orchestrator | Scheduled |
 

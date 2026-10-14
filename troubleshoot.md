@@ -167,6 +167,20 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 4.2 Sentence Boundary Splitting on Decimal Metrics (`2.5 meters`)
+
+#### Symptom: Sentence count assertions fail or text fragments prematurely on numerical measurements
+- **Root Cause**:
+  Naive string splitting on periods (`text.split('.')`) matches decimal separators inside metric distance values (such as `2.5 meters`), fragmenting one sentence into two halves (`['... obstacle at 2', '5 meters to your right']`).
+- **Diagnostic & Fix**:
+  Use regex sentence boundary splitting requiring a period followed by whitespace:
+  ```python
+  import re
+  sentences = [s.strip() for s in re.split(r'\.\s+', text.rstrip('.')) if s.strip()]
+  ```
+
+---
+
 ## 5. System Thermal & Power Throttling (Raspberry Pi 5)
 
 ### 5.1 Undervoltage Warning & Frequency Throttling
