@@ -76,16 +76,16 @@ Before merging any code into `main`, every pull request must pass three verifica
 
 ### Gate 1: Static Analysis & Type Checking
 ```bash
-ruff check src/ tests/
-mypy src/
+ruff check . tests/
+mypy .
 ```
 All functions must have comprehensive type hints (`typing.Optional`, `typing.Tuple`, `dataclass`).
 
 ### Gate 2: Headless Unit & Integration Tests
 ```bash
-pytest tests/ -v --cov=src --cov-report=term-missing
+pytest tests/ -v --cov=. --cov-report=term-missing
 ```
-Minimum acceptable line coverage across `src/` is $85\%$.
+Minimum acceptable line coverage across core modules is $85\%$.
 
 ### Gate 3: Quantitative Latency Budget Check
 Every perception and audio commit must be benchmarked against latency limits:

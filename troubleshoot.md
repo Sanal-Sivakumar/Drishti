@@ -24,8 +24,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 - **Fix**:
   1. Kill orphaned streaming processes: `kill -9 $(fuser /dev/video0 2>/dev/null)`
   2. For Raspberry Pi 5, verify physical orientation: the blue tape on the 15-pin FFC ribbon cable must face towards the Ethernet/USB ports. Ensure `dtoverlay=imx708` is loaded.
-  3. Drishti's Hardware Abstraction Layer (`src/hal/camera.py`) implements automatic fallback to mock/synthetic test video loops during headless validation.
-
+  3. Drishti's Hardware Abstraction Layer (`hal/camera.py`) implements automatic fallback to mock/synthetic test video loops during headless validation.
 ---
 
 ### 1.2 I2C Bus & VL53L1X ToF Sensor Failures
@@ -42,7 +41,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
   ```
 - **Fix**:
   1. If `0x29` does not appear, power cycle the 3.3V rail (Pin 1) or run an I2C clock unwedge sequence (toggling SCL 9 times to force the slave to release SDA).
-  2. Drishti's distance sensor driver (`src/hal/distance_sensor.py`) checks for hardware presence at initialization; if absent or disabled in dev mode, it switches cleanly to synthetic range simulation.
+  2. Drishti's distance sensor driver (`hal/distance_sensor.py`) checks for hardware presence at initialization; if absent or disabled in dev mode, it switches cleanly to synthetic range simulation.
 
 ---
 
