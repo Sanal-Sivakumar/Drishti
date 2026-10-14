@@ -181,9 +181,43 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
-## 5. System Thermal & Power Throttling (Raspberry Pi 5)
+## 5. Edge Privacy Masking & Telemetry Gateway
 
-### 5.1 Undervoltage Warning & Frequency Throttling
+### 5.1 Mosquitto MQTT Connection Refused or Offline Dropouts
+
+#### Symptom: `ConnectionRefusedError: [Errno 111] Connection refused` or telemetry packets not received by companion app
+- **Root Cause**:
+  1. Local Mosquitto broker daemon is not running on port 1883/8883.
+  2. Firewall blocking MQTT port or incorrect broker IP address.
+  3. Drishti operates in offline-first mode: when the broker is unavailable, telemetry should buffer in RAM rather than crashing the pipeline.
+- **Diagnostic Command**:
+  ```bash
+  # Check if Mosquitto broker service is active
+  systemctl status mosquitto
+  # Test local publish/subscribe
+  mosquitto_sub -t "drishti/test" &
+  mosquitto_pub -t "drishti/test" -m "ping"
+  ```
+- **Fix**:
+  1. Start the local Mosquitto daemon: `sudo systemctl start mosquitto`.
+  2. Drishti's `TelemetryClient` (`safety/telemetry.py`) catches connection exceptions gracefully, buffering heartbeat and alert payloads in memory (`buffered_telemetry`) so navigational perception is never interrupted by cellular dropouts.
+
+---
+
+### 5.2 Gaussian Kernel Dimensionality & Border Overflow
+
+#### Symptom: `ValueError` during 2D face convolution or black borders around cropped face regions
+- **Root Cause**:
+  1. Kernel size $k$ must be odd ($k = 2m + 1$) to ensure a well-defined symmetric center pixel.
+  2. Convolving near frame boundaries ($x < k$ or $y < k$) causes index out-of-bounds if edge reflection/clamping is omitted.
+- **Diagnostic & Fix**:
+  Ensure kernel size satisfies $k = 2 \lfloor 3\sigma \rfloor + 1$ and border pixels use mirror padding (`cv2.BORDER_REFLECT` or NumPy boundary clamping) as implemented in `safety/anonymizer.py`.
+
+---
+
+## 6. System Thermal & Power Throttling (Raspberry Pi 5)
+
+### 6.1 Undervoltage Warning & Frequency Throttling
 
 #### Symptom: Pipeline FPS suddenly drops from 30 FPS to 12 FPS during continuous inference
 - **Root Cause**:
@@ -208,7 +242,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
-## 6. Diagnostic Decision Matrix
+## 7. Diagnostic Decision Matrix
 
 ```
 [System Failure Detected]

@@ -103,3 +103,4 @@ class SpeechService:
             "pcm_samples": pcm_samples,
             "sample_rate": self.sample_rate,
         }
+

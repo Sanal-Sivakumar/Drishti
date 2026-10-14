@@ -58,3 +58,4 @@ def test_ocr_text_extraction_headless():
     assert "confidence" in result
     assert "script" in result
     assert result["confidence"] >= 0.0
+

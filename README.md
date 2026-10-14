@@ -237,6 +237,15 @@ python3 scripts/run_phase2_cognitive.py --camera synthetic
 
 # Real laptop webcam snapshot with audible speech synthesis
 python3 scripts/run_phase2_cognitive.py --camera real --speak
+### 6. Running Master Full-System Orchestrator (Phase 3)
+Execute all subsystems concurrently (fast 3D perception, tactile triggers, Gaussian face redaction, and caregiver telemetry):
+
+```bash
+# Option A: Headless Simulation Mode (Zero hardware required)
+python3 scripts/run_phase3_full_system.py --camera synthetic
+
+# Option B: Live Wearable Mode (Laptop /dev/video0 + plughw:1,0 Audio Sink)
+python3 scripts/run_phase3_full_system.py --camera real --audio real
 ```
 
 ---
@@ -248,7 +257,9 @@ python3 scripts/run_phase2_cognitive.py --camera real --speak
 | **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- Deterministic synthetic mock generators for headless simulation<br>- Hardware and pipeline YAML configuration schemas | ✅ **Completed** | **Checkpoint 0**: All 4 HAL drivers verified via `test_hal.py`. |
 | **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer (up to 655 $\mu$s delay)<br>- Camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier<br>- V4L2 live webcam streaming and ALSA direct speaker output | ✅ **Completed** | **Checkpoint 1**: 1.28 ms mean PC cycle time ($> 700 \text{ FPS}$), verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
 | **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Local neural TTS audio vocalization (Piper / MMS-TTS / Speech Dispatcher) | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
-| **Phase 3** | **Edge Privacy, Caregiver Telemetry & Companion App**<br>- Local Gaussian face and PII redaction filter<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1<br>- Emergency distress notification pipeline | 🔄 **In Progress** | **Checkpoint 3**: End-to-end multi-threaded pipeline stress tests. |
+| **Phase 3** | **Edge Privacy, Caregiver Telemetry & Companion App**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1<br>- Emergency distress notification & master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 33/33 tests passing, verified via `test_anonymizer.py`, `test_telemetry.py`, `test_pipeline.py`. |
+| **Phase 4** | **Field Deployment, Wearable Packaging & Hailo-8L Acceleration**<br>- Hailo-8L M.2 HAT NPU compilation and ONNX pipeline offload<br>- 3D-printed modular chest harness / spectacles frame integration<br>- Bone-conduction headset low-profile acoustic integration | 🔄 **Scheduled** | **Checkpoint 4**: Real-world field navigation and user trial evaluation. |
+
 
 ---
 

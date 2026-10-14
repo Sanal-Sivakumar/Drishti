@@ -38,3 +38,4 @@ def test_speech_service_speaking_rate():
     res_fast = service_fast.speak(long_text, play_audio=False)
 
     assert res_fast["duration_s"] < res_normal["duration_s"]
+
