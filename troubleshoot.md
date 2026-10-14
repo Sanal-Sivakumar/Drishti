@@ -109,6 +109,23 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 3.4 Subdirectory Script Execution (`ModuleNotFoundError: No module named 'hal'`)
+
+#### Symptom: Invoking `python3 scripts/run_phase1_perception.py` throws `ModuleNotFoundError`
+- **Root Cause**:
+  When Python executes a script directly, `sys.path[0]` is initialized to the directory containing the script (`scripts/`), rather than the project root directory. Top-level project packages (`hal`, `perception`, `cognitive`) cannot be found.
+- **Diagnostic & Fix**:
+  In all standalone runner scripts, prepend the parent repository root to `sys.path`:
+  ```python
+  import sys
+  from pathlib import Path
+  root_dir = Path(__file__).resolve().parent.parent
+  if str(root_dir) not in sys.path:
+      sys.path.insert(0, str(root_dir))
+  ```
+
+---
+
 ## 4. Multilingual OCR & Indic Script Rendering
 
 ### 4.1 Missing Indic Language Models / Ligature Glitches

@@ -32,3 +32,4 @@ jobs:
       - name: Execute Headless Test Suite
         run: |
           python -m pytest tests/ -v
+
