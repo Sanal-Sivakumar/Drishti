@@ -184,6 +184,12 @@ def main() -> None:
         action="store_true",
         help="Disable verbal speech announcements",
     )
+    parser.add_argument(
+        "--max-cycles",
+        type=int,
+        default=None,
+        help="Optional maximum number of perception cycles to execute before exiting (default: infinite)",
+    )
     args = parser.parse_args()
 
     print("=" * 80)
@@ -253,7 +259,7 @@ def main() -> None:
     t_start = time.time()
 
     try:
-        while running:
+        while running and (args.max_cycles is None or cycle_count < args.max_cycles):
             cycle_count += 1
             res = pipeline.step()
             fast = res.get("fast_perception", {})
