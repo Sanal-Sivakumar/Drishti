@@ -299,16 +299,27 @@ Drishti implements an automated banknote classification engine based on distinct
 | **₹500**| Stone Grey | $150 \text{ mm} \times 66 \text{ mm}$ (Aspect: 2.27) | Red Fort (Delhi) |
 
 ### 5.3 Classification Architecture
-The banknote classifier uses a fast, two-stage identification pipeline:
-1. **Geometric & Color Ratio Pre-filter**:
-   - The user holds the banknote before the camera and presses Tactile Button 2.
-   - The bounding rectangle is extracted via contour detection, and its physical aspect ratio is computed:
-     $$\text{Aspect Ratio} = \frac{\text{Width}}{\text{Height}}$$
-   - Hue-Saturation-Value (HSV) histograms are calculated across color channels, eliminating lighting luminance variations.
-2. **MobileNetV3-Small INT8 Deep Feature Extractor**:
-   - The cropped note is resized to $224 \times 224 \times 3$ and passed through a quantized MobileNetV3-Small backbone with squeeze-and-excitation attention blocks.
-   - A softmax output probability distribution $P(\text{class} | \mathbf{I})$ produces the predicted denomination.
-   - If confidence exceeds $0.85$, the neural TTS generates immediate audio verification: *"Five hundred rupees"*.
+The banknote classifier uses a fast, multi-stage physical and optical verification pipeline:
+1. **High-Frequency Edge Density & Intaglio Texture Gating**:
+   - Computes local spatial intensity gradients across the candidate image:
+     $$G_x(x, y) = I(x+1, y) - I(x-1, y), \quad G_y(x, y) = I(x, y+1) - I(x, y-1)$$
+     $$|\nabla I(x, y)| = |G_x(x, y)| + |G_y(x, y)|$$
+   - The mean gradient density $\mu_{edge} = \frac{1}{HW} \sum |\nabla I|$ must satisfy $\mu_{edge} \ge 14.0$ to pass. Smooth background surfaces (human faces, shirts, walls) have $\mu_{edge} < 8.0$ and are immediately rejected, preventing false positive announcements.
+2. **Geometric Aspect Ratio Verification**:
+   - Evaluates the bounding ratio $\text{AR} = \frac{\text{Width}}{\text{Height}}$.
+   - Enforces Mahatma Gandhi New Series physical envelope bounds: $1.60 \le \text{AR} \le 2.60$.
+3. **BGR-to-HSV Chromatic Ink Distribution & Disambiguation**:
+   - Converts standard camera BGR pixel buffers directly to Hue, Saturation, Value color space without external dependencies.
+   - Evaluates circular angular difference $\Delta \theta = \min(|H - \theta_{ref}|, 360^\circ - |H - \theta_{ref}|)$ against dedicated denomination profiles:
+     - ₹10: $\theta_{ref} = 18^\circ$ (Chocolate Brown)
+     - ₹20: $\theta_{ref} = 42^\circ$ (Greenish Yellow, $\text{AR} = 2.05$)
+     - ₹50: $\theta_{ref} = 195^\circ$ (Fluorescent Blue)
+     - ₹100: $\theta_{ref} = 265^\circ$ (Lavender)
+     - ₹200: $\theta_{ref} = 58^\circ$ (Bright Yellow, $\text{AR} = 2.21$)
+     - ₹500: $\theta_{ref} = 110^\circ$ (Stone Grey / Greenish)
+   - Resolves potential ₹20 vs ₹200 ambiguity through dedicated angular tolerance bands ($\le 12^\circ$) and aspect ratio error weighting ($0.70 \times \text{Score}_{hue} + 0.30 \times \text{Score}_{aspect}$).
+4. **Immediate Spoken Verification**:
+   - If confidence exceeds the threshold ($\ge 0.50$), the speech engine speaks the verified denomination (e.g. *"Fifty rupees"*).
 
 ---
 

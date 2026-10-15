@@ -122,12 +122,12 @@ As of the current milestone, the engineering baseline stands as follows:
 
 | Subsystem / Phase | Current State | Verification Passed |
 | :--- | :--- | :--- |
-| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2 physical camera + ALSA direct speaker output | `tests/unit/test_hal.py` (4/4 PASSED) |
-| **Phase 1: Fast Perception** | 3D Spatial Audio (ITD + ILD), Ray-Cone Depth Fusion, INR Banknote Classifier, FastPerceptionPipeline | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (9/9 PASSED) |
-| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), SmolVLM/Moondream2 Narrator, Local Speech Synthesis | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (9/9 PASSED) |
-| **Phase 3: Safety & Telemetry** | Local 2D Gaussian Face Redaction, Mosquitto MQTT Telemetry (TLS 1.3, QoS 1), Master Orchestrator | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/integration/test_pipeline.py` (11/11 PASSED) |
-| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0` / `spd-say`), and laptop microphone (`plughw:1,0`) tested live | `scripts/run_phase1_perception.py`, `scripts/run_phase2_cognitive.py`, `scripts/run_phase3_full_system.py`, `scripts/run_live_wearable.py` |
-| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) | `.github/workflows/ci.yml` (35/35 Tests Passing) |
+| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2/OpenCV physical camera with auto-fallback + ALSA persistent thread output | `tests/unit/test_hal.py` (4/4 PASSED) |
+| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector, 3D Spatial Audio (ITD + ILD + PRF), Ray-Cone Depth Fusion, BGR INR Banknote Classifier with Edge Gating | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (15/15 PASSED) |
+| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), Multimodal Spatial Scene Narrator & ONNX VLM runner, Local Speech with Audio Sink routing | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (10/10 PASSED) |
+| **Phase 3: Safety & Telemetry** | Local 2D Vectorized Gaussian Face Redaction, Mosquitto MQTT Telemetry (TLS 1.3, QoS 1, paho v2), Master Orchestrator | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/integration/test_pipeline.py` (12/12 PASSED) |
+| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0` / `default`), and synthetic fallback tested live | `scripts/run_phase1_perception.py`, `scripts/run_phase2_cognitive.py`, `scripts/run_phase3_full_system.py`, `scripts/run_live_wearable.py` |
+| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) with model verification | `.github/workflows/ci.yml` (41/41 Tests Passing) |
 | **Next Tasks (Phase 4)** | Hailo-8L NPU pipeline acceleration, 3D wearable enclosure, and field navigation trials | Scheduled |
 
 

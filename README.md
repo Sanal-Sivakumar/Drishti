@@ -140,26 +140,33 @@ Drishti/
 ├── technical_details.md      # Beginner-to-advanced first-principles theory & math derivations
 ├── troubleshoot.md           # Operational failure modes, diagnostics, and permanent fixes
 ├── config/                   # Hardware and pipeline configuration schemas
+│   ├── config_loader.py      # Centralized YAML configuration loader
 │   ├── hardware_dev.yaml     # Workstation webcam and synthetic sensor setup
 │   ├── hardware_pi5.yaml     # Raspberry Pi 5 pinout, I2C bus, CSI configs
 │   └── pipeline_config.yaml  # Detection thresholds, audio frequencies, priority rules
 ├── hal/                      # Hardware Abstraction Layer (Drivers & Synthetic Mocks)
-│   ├── camera.py             # Abstract camera (V4L2, Libcamera, Synthetic Pattern)
+│   ├── camera.py             # Abstract camera (V4L2, OpenCV, Synthetic with fallback)
 │   ├── distance_sensor.py    # Abstract range sensor (VL53L1X I2C, Synthetic Sim)
 │   ├── trigger_input.py      # Abstract tactile button (GPIO pull-up, Synthetic Event)
-│   └── audio_output.py       # Abstract audio sink (ALSA/Pulse, Headless PCM buffer)
+│   └── audio_output.py       # Abstract audio sink (ALSA persistent thread, Headless buffer)
+├── models/                   # Neural weights directory
+│   └── yolov8n.onnx          # Official YOLOv8n ONNX 80-class COCO obstacle detector
 ├── perception/               # Fast Perception Subsystem
-│   ├── detector.py           # Headless INT8 YOLO object detector
-│   ├── depth_fusion.py       # 2D bounding box to 3D spatial ray-cone fusion
-│   ├── currency.py           # MobileNetV3-based Indian currency note recognizer
-│   └── spatial_audio.py      # Binaural acoustic synthesizer (ITD + ILD)
+│   ├── detector.py           # Real ONNX YOLOv8 obstacle detector with NMS
+│   ├── depth_fusion.py       # 2D bounding box to 3D spatial ray-cone depth fusion
+│   ├── currency.py           # BGR Indian currency note recognizer with edge gating
+│   └── spatial_audio.py      # Binaural acoustic synthesizer (ITD + ILD + PRF)
 ├── cognitive/                # On-Demand Semantic Subsystem
-│   ├── ocr_engine.py         # Multilingual Indic OCR (Eng, Hin, Tam, Mal)
-│   ├── vlm_narrator.py       # Local Vision-Language Model scene describer
-│   └── speech_service.py     # Piper / MMS-TTS neural speech synthesizer
+│   ├── ocr_engine.py         # Multilingual Indic OCR (Eng, Hin, Tam, Mal via pytesseract)
+│   ├── vlm_narrator.py       # Multimodal spatial scene describer & ONNX VLM runner
+│   └── speech_service.py     # Speech synthesis with direct HAL audio sink routing
 ├── safety/                   # Privacy Masking & Telemetry
-│   ├── anonymizer.py         # Edge-side Gaussian face & PII redaction
-│   └── telemetry.py          # Mosquitto MQTT client (TLS 1.3, QoS 1)
+│   ├── anonymizer.py         # Vectorized Gaussian face & head redaction filter
+│   └── telemetry.py          # Mosquitto MQTT client (TLS 1.3, QoS 1, paho v2)
+├── scripts/                  # Autonomous deployment & demonstration runners
+│   ├── download_models.py    # Neural model download & integrity verification
+│   ├── run_live_wearable.py  # Production continuous live wearable runner
+│   └── run_phase*.py         # Subsystem demonstration harnesses
 ├── pipeline.py               # Master headless pipeline orchestrator
 ├── requirements.txt          # Python runtime dependencies
 └── tests/                    # Headless automated unit and integration tests
@@ -207,13 +214,16 @@ source .venv/bin/activate
 # Upgrade packaging tools and install requirements
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
+
+# Download official neural model weights (YOLOv8n ONNX)
+python3 scripts/download_models.py
 ```
 
 ### 3. Running Headless Verification Tests
 The entire test suite runs completely headless without requiring physical cameras, I2C sensors, audio output hardware, or GUI display servers:
 
 ```bash
-# Run unit and integration tests with coverage report
+# Run complete test suite (41 unit and integration tests)
 pytest tests/ -v
 ```
 
@@ -290,7 +300,7 @@ journalctl -u drishti.service -f
 | **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- Deterministic synthetic mock generators for headless simulation<br>- Hardware and pipeline YAML configuration schemas | ✅ **Completed** | **Checkpoint 0**: All 4 HAL drivers verified via `test_hal.py`. |
 | **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer (up to 655 $\mu$s delay)<br>- Camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier<br>- V4L2 live webcam streaming and ALSA direct speaker output | ✅ **Completed** | **Checkpoint 1**: 1.28 ms mean PC cycle time ($> 700 \text{ FPS}$), verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
 | **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Local neural TTS audio vocalization (Piper / MMS-TTS / Speech Dispatcher) | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
-| **Phase 3** | **Edge Privacy, Caregiver Telemetry & Companion App**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1<br>- Emergency distress notification & master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 33/33 tests passing, verified via `test_anonymizer.py`, `test_telemetry.py`, `test_pipeline.py`. |
+| **Phase 3** | **Edge Privacy, Caregiver Telemetry & Companion App**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Emergency distress notification & master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 41/41 tests passing, verified via `test_anonymizer.py`, `test_telemetry.py`, `test_pipeline.py`, `test_fast_pipeline.py`. |
 | **Phase 4** | **Field Deployment, Wearable Packaging & Hailo-8L Acceleration**<br>- Hailo-8L M.2 HAT NPU compilation and ONNX pipeline offload<br>- 3D-printed modular chest harness / spectacles frame integration<br>- Bone-conduction headset low-profile acoustic integration | 🔄 **Scheduled** | **Checkpoint 4**: Real-world field navigation and user trial evaluation. |
 
 
