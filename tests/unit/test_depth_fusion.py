@@ -62,3 +62,23 @@ def test_fuse_detection_with_tof_and_fallback():
     assert fused_fallback["in_tof_cone"] is False
     assert fused_fallback["distance_m"] > 0
 
+
+def test_fuse_multiple_detections_disambiguation():
+    """Verify that multiple obstacles in the cone receive differentiated distances."""
+    fuser = SpatialDepthFuser(focal_length_px=500.0, principal_point_x=320.0, principal_point_y=240.0)
+
+    # Obstacle 1: Centered chair [300, 200, 340, 280]
+    # Obstacle 2: Secondary person also near center but larger [290, 100, 350, 380]
+    raw_detections = [
+        {"bbox": [300.0, 200.0, 340.0, 280.0], "class_name": "chair", "confidence": 0.8},
+        {"bbox": [290.0, 100.0, 350.0, 380.0], "class_name": "person", "confidence": 0.9},
+    ]
+
+    fused = fuser.fuse_all_detections(raw_detections, tof_distance_m=1.10)
+    assert len(fused) == 2
+    # One should get ToF laser fusion, while the other maintains perspective prior
+    sources = [f["fusion_source"] for f in fused]
+    assert "tof_laser_fusion" in sources
+    assert "geometric_perspective_prior" in sources
+
+

@@ -47,23 +47,43 @@ class SpatialDepthFuser:
         elevation_rad = np.arctan((v - self.cy) / self.fy)
         return float(azimuth_rad), float(elevation_rad)
 
-    def is_in_tof_cone(self, u_min: float, u_max: float) -> bool:
-        """Evaluate if bounding box horizontal extent intersects the ToF sensor's conical aperture.
+    def is_in_tof_cone(
+        self,
+        u_min: float,
+        u_max: float,
+        v_min: Optional[float] = None,
+        v_max: Optional[float] = None,
+    ) -> bool:
+        """Evaluate if bounding box intersects the ToF sensor's conical aperture.
         
         Args:
             u_min: Left bounding box edge.
             u_max: Right bounding box edge.
+            v_min: Optional top bounding box edge.
+            v_max: Optional bottom bounding box edge.
         
         Returns:
-            bool: True if bounding box intersects [-theta_FoV, +theta_FoV].
+            bool: True if bounding box intersects [-theta_FoV, +theta_FoV] horizontally and vertically.
         """
         theta_min, _ = self.compute_ray_angles(u_min, self.cy)
         theta_max, _ = self.compute_ray_angles(u_max, self.cy)
 
-        # Interval intersection test: [theta_min, theta_max] vs [-cone_half, +cone_half]
-        overlap_left = max(theta_min, -self.cone_half_angle_rad)
-        overlap_right = min(theta_max, self.cone_half_angle_rad)
-        return bool(overlap_left <= overlap_right)
+        # Horizontal overlap test
+        overlap_h_left = max(theta_min, -self.cone_half_angle_rad)
+        overlap_h_right = min(theta_max, self.cone_half_angle_rad)
+        h_overlap = overlap_h_left <= overlap_h_right
+
+        if not h_overlap:
+            return False
+
+        if v_min is not None and v_max is not None:
+            _, phi_min = self.compute_ray_angles(self.cx, v_min)
+            _, phi_max = self.compute_ray_angles(self.cx, v_max)
+            overlap_v_top = max(min(phi_min, phi_max), -self.cone_half_angle_rad)
+            overlap_v_bottom = min(max(phi_min, phi_max), self.cone_half_angle_rad)
+            return bool(overlap_v_top <= overlap_v_bottom)
+
+        return True
 
     def fuse_detection(
         self,
@@ -71,6 +91,7 @@ class SpatialDepthFuser:
         class_name: str,
         confidence: float,
         tof_distance_m: Optional[float],
+        force_tof: bool = False,
     ) -> Dict[str, Any]:
         """Fuse a single detected obstacle bounding box with ToF distance.
         
@@ -79,6 +100,7 @@ class SpatialDepthFuser:
             class_name: Semantic label (e.g., 'chair', 'person').
             confidence: Detector confidence score [0.0, 1.0].
             tof_distance_m: Metric distance reading from ToF sensor, or None.
+            force_tof: If True, assign ToF distance when in cone.
         
         Returns:
             Dict[str, Any]: Spatial obstacle dictionary containing 3D coordinates,
@@ -90,18 +112,19 @@ class SpatialDepthFuser:
         bbox_height_px = max(1.0, v_max - v_min)
 
         azimuth_rad, elevation_rad = self.compute_ray_angles(u_center, v_center)
-        in_cone = self.is_in_tof_cone(u_min, u_max)
+        in_cone = self.is_in_tof_cone(u_min, u_max, v_min, v_max)
+
+        # Perspective prior fallback estimation: Z \approx (fy * H_real) / h_pixels
+        prior_height = self.class_priors.get(class_name, 1.0)
+        geom_distance = float((self.fy * prior_height) / bbox_height_px)
+        geom_distance = float(np.clip(geom_distance, 0.3, 10.0))
 
         # Determine metric distance
-        if in_cone and tof_distance_m is not None and tof_distance_m > 0:
+        if (in_cone or force_tof) and tof_distance_m is not None and tof_distance_m > 0:
             metric_distance = tof_distance_m
             fusion_source = "tof_laser_fusion"
         else:
-            # Perspective prior fallback estimation: Z \approx (fy * H_real) / h_pixels
-            prior_height = self.class_priors.get(class_name, 1.0)
-            metric_distance = float((self.fy * prior_height) / bbox_height_px)
-            # Clamp between 0.3m and 10m
-            metric_distance = float(np.clip(metric_distance, 0.3, 10.0))
+            metric_distance = geom_distance
             fusion_source = "geometric_perspective_prior"
 
         # Calculate 3D Cartesian coordinates in camera frame:
@@ -121,3 +144,67 @@ class SpatialDepthFuser:
             "in_tof_cone": in_cone,
             "fusion_source": fusion_source,
         }
+
+    def fuse_all_detections(
+        self,
+        raw_detections: List[Dict[str, Any]],
+        tof_distance_m: Optional[float] = None,
+        zone_distances: Optional[List[float]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fuse multiple simultaneous detections with multi-zone or single ToF range.
+        
+        Disambiguates multiple objects in the cone so that different objects at
+        different depths are not erroneously assigned the same scalar distance.
+        """
+        if not raw_detections:
+            return []
+
+        # Find which detections fall inside the ToF cone
+        cone_candidates = []
+        for i, det in enumerate(raw_detections):
+            bbox = det["bbox"]
+            u_min, v_min, u_max, v_max = bbox
+            if self.is_in_tof_cone(u_min, u_max, v_min, v_max):
+                u_c = (u_min + u_max) / 2.0
+                v_c = (v_min + v_max) / 2.0
+                az, el = self.compute_ray_angles(u_c, v_c)
+                angular_offset = az * az + el * el
+                cone_candidates.append((i, angular_offset))
+
+        # Sort candidate in cone closest to optical center
+        primary_cone_idx = None
+        if cone_candidates:
+            cone_candidates.sort(key=lambda c: c[1])
+            primary_cone_idx = cone_candidates[0][0]
+
+        fused = []
+        for i, det in enumerate(raw_detections):
+            bbox = det["bbox"]
+            c_name = det.get("class_name", "obstacle")
+            conf = det.get("confidence", 0.5)
+
+            # Only assign single scalar ToF distance to the primary centered obstacle in cone
+            is_primary_cone = (i == primary_cone_idx)
+            use_tof = tof_distance_m if is_primary_cone else None
+
+            # If multi-zone is available (e.g. 4x4 array of 16 distances)
+            if zone_distances and len(zone_distances) >= 16:
+                u_c = (bbox[0] + bbox[2]) / 2.0
+                v_c = (bbox[1] + bbox[3]) / 2.0
+                col = int(np.clip(u_c / (self.cx * 2.0) * 4, 0, 3))
+                row = int(np.clip(v_c / (self.cy * 2.0) * 4, 0, 3))
+                zone_idx = row * 4 + col
+                if zone_idx < len(zone_distances) and zone_distances[zone_idx] > 0:
+                    use_tof = zone_distances[zone_idx]
+                    is_primary_cone = True
+
+            out = self.fuse_detection(
+                bbox=tuple(bbox),
+                class_name=c_name,
+                confidence=conf,
+                tof_distance_m=use_tof,
+                force_tof=is_primary_cone and use_tof is not None,
+            )
+            fused.append(out)
+
+        return fused
