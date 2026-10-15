@@ -55,3 +55,15 @@ def test_banknote_classification_profiles():
     assert res_10["denomination"] == 10
     assert "Ten" in res_10["spoken_name"]
 
+
+def test_reject_user_sitting_in_room():
+    """Verify that a smooth person/room frame is rejected with denomination None."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.70)
+    # Bluish room frame (user wearing blue shirt in front of camera)
+    room_frame = np.full((480, 640, 3), [130, 160, 205], dtype=np.uint8)
+    res = rec.classify_banknote(room_frame)
+    assert res["denomination"] is None
+    assert "No note" in res["spoken_name"]
+    assert res["confidence"] == 0.0
+
+

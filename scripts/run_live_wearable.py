@@ -146,9 +146,10 @@ def main() -> None:
         help="Target hardware execution profile (default: auto)",
     )
     parser.add_argument(
-        "--no-continuous-currency",
+        "--continuous-currency",
         action="store_true",
-        help="Disable continuous automatic banknote recognition",
+        default=False,
+        help="Enable continuous automatic banknote recognition in background",
     )
     parser.add_argument(
         "--currency-cooldown",
@@ -184,7 +185,7 @@ def main() -> None:
         trigger_input=trigger_input,
         audio_sink=audio_sink,
         telemetry_client=telemetry,
-        continuous_currency=not args.no_continuous_currency,
+        continuous_currency=args.continuous_currency,
         currency_interval=args.currency_interval,
         currency_cooldown_s=args.currency_cooldown,
     )
@@ -203,15 +204,16 @@ def main() -> None:
     # 4. Startup Vocal Announcement
     if not args.no_speech:
         print("[*] Broadcasting startup chime...")
-        pipeline.speech_service.speak(
-            "Drishti online. Continuous obstacle guidance and currency detection active.",
-            play_audio=True
-        )
+        greeting = "Drishti online. Continuous obstacle guidance active. Press C or Button 2 to identify currency."
+        if args.continuous_currency:
+            greeting = "Drishti online. Continuous obstacle guidance and currency detection active."
+        pipeline.speech_service.speak(greeting, play_audio=True)
 
     print("\n" + "=" * 80)
     print("  SYSTEM RUNNING CONTINUOUSLY (Press Ctrl+C to terminate)")
     print("  Controls: [N + Enter] = Narrate Scene | [C + Enter] = Identify Note/OCR | [Q + Enter] = Quit")
     print("=" * 80 + "\n")
+
 
     cycle_count = 0
     t_start = time.time()
@@ -272,3 +274,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

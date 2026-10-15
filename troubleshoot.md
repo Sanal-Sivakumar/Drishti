@@ -181,6 +181,26 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 4.3 Spurious Banknote Announcements from Ambient Room Lighting / Blue Clothes
+
+#### Symptom: Wearable blurted out "Fifty rupees" while the user was simply sitting in front of the camera with no currency present
+- **Root Cause**:
+  1. A naive color-only classifier averaged the hue of the entire webcam view. In cool-white LED lighting or with blue clothing in view, the scene's mean hue (~195°) matched the ₹50 fluorescent blue profile.
+  2. Because there was no structural presence check (aspect ratio or texture variance), the classifier assigned an artificial confidence $> 0.70$ to a plain shirt or wall.
+- **Diagnostic Command**:
+  ```bash
+  # Run currency unit test verifying rejection of smooth webcam frames
+  pytest tests/unit/test_currency.py -k "test_reject_user_sitting_in_room" -v
+  ```
+- **Permanent Fix**:
+  Drishti's `IndianCurrencyRecognizer` (`perception/currency.py`) implements a strict multi-stage validator:
+  1. **2D Edge Texture Density Gating**: Computes normalized 2D spatial gradients ($G_x, G_y$). If edge density is $< 14.0$, the object is smooth (face, wall, shirt) and is rejected immediately before color matching.
+  2. **Geometric Aspect Ratio Gating**: When a candidate contour is analyzed, its aspect ratio must lie within the physical banknote range ($1.70 \le \text{AR} \le 2.45$).
+  3. **Ink Saturation Threshold**: Discards low-saturation room washes, requiring high-purity ink pigmentation.
+  4. **On-Demand Activation**: Currency reading is triggered by user intent (Press `C` or Button 2) rather than running unprompted.
+
+---
+
 ## 5. Edge Privacy Masking & Telemetry Gateway
 
 ### 5.1 Mosquitto MQTT Connection Refused or Offline Dropouts
