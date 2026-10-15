@@ -35,3 +35,18 @@ def test_publish_emergency_alert():
     # Ensure buffered in memory
     assert len(client.buffered_telemetry) >= 1
 
+
+def test_publish_event():
+    """Verify standard non-emergency event publishing."""
+    client = TelemetryClient(device_id="drishti-unit-test")
+    event = client.publish_event(
+        event_type="USER_NARRATION_REQUEST",
+        details={"faces_redacted": 1},
+    )
+
+    assert event["event_type"] == "USER_NARRATION_REQUEST"
+    assert event["status"] == "INFORMATIONAL"
+    assert event["details"]["faces_redacted"] == 1
+    assert len(client.buffered_telemetry) >= 1
+
+

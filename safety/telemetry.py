@@ -5,6 +5,7 @@ distress alerts over TLS 1.3 with QoS Level 1 ('at least once' delivery).
 """
 
 from typing import Dict, Any, Optional, List
+import os
 import json
 import time
 import threading
@@ -17,14 +18,16 @@ class TelemetryClient:
         self,
         device_id: str = "drishti-wearable-01",
         broker_host: str = "localhost",
-        broker_port: int = 8883,
-        use_tls: bool = True,
+        broker_port: int = 1883,
+        use_tls: bool = False,
+        ca_certs: Optional[str] = None,
         qos: int = 1,
     ) -> None:
         self.device_id = device_id
         self.broker_host = broker_host
         self.broker_port = broker_port
         self.use_tls = use_tls
+        self.ca_certs = ca_certs
         self.qos = qos
         self.is_connected = False
         self.buffered_telemetry: List[Dict[str, Any]] = []
@@ -34,13 +37,23 @@ class TelemetryClient:
         self.topic_heartbeat = f"drishti/device/{self.device_id}/heartbeat"
         self.topic_status = f"drishti/device/{self.device_id}/status"
         self.topic_emergency = f"drishti/device/{self.device_id}/emergency"
+        self.topic_events = f"drishti/device/{self.device_id}/events"
 
         self.mqtt_client = None
         try:
             import paho.mqtt.client as mqtt
-            self.mqtt_client = mqtt.Client(client_id=self.device_id)
+            try:
+                from paho.mqtt.enums import CallbackAPIVersion
+                self.mqtt_client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id=self.device_id)
+            except (ImportError, AttributeError):
+                self.mqtt_client = mqtt.Client(client_id=self.device_id)
+
             if self.use_tls:
-                self.mqtt_client.tls_set()
+                if self.ca_certs and os.path.exists(self.ca_certs):
+                    self.mqtt_client.tls_set(ca_certs=self.ca_certs)
+                else:
+                    self.mqtt_client.tls_set()
+
             # Register Last Will and Testament (LWT)
             lwt_payload = json.dumps({
                 "device_id": self.device_id,
@@ -48,7 +61,7 @@ class TelemetryClient:
                 "timestamp": time.time(),
             })
             self.mqtt_client.will_set(self.topic_status, payload=lwt_payload, qos=self.qos, retain=True)
-        except (ImportError, Exception):
+        except Exception as e:
             self.mqtt_client = None
 
     def connect(self) -> bool:
@@ -59,7 +72,7 @@ class TelemetryClient:
                 self.mqtt_client.loop_start()
                 self.is_connected = True
                 return True
-            except Exception:
+            except Exception as e:
                 self.is_connected = False
                 return False
         return False
@@ -106,6 +119,33 @@ class TelemetryClient:
             try:
                 msg_json = json.dumps(payload)
                 self.mqtt_client.publish(self.topic_heartbeat, payload=msg_json, qos=self.qos)
+            except Exception:
+                pass
+
+        return payload
+
+    def publish_event(
+        self,
+        event_type: str = "USER_NARRATION_REQUEST",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Publish routine informational event (narration, reading, mode change)."""
+        payload = {
+            "device_id": self.device_id,
+            "timestamp": round(time.time(), 3),
+            "event_type": event_type,
+            "alert_type": event_type,
+            "details": details or {},
+            "status": "INFORMATIONAL",
+        }
+
+        with self.lock:
+            self.buffered_telemetry.append(payload)
+
+        if self.is_connected and self.mqtt_client is not None:
+            try:
+                msg_json = json.dumps(payload)
+                self.mqtt_client.publish(self.topic_events, payload=msg_json, qos=self.qos)
             except Exception:
                 pass
 

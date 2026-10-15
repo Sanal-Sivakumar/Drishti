@@ -47,3 +47,19 @@ def test_anonymize_frame_with_box():
     assert "image" in res
     assert res["image"].shape == frame.shape
 
+
+def test_face_detection_from_person_box():
+    """Verify facial/head candidate extraction from YOLO person bounding boxes."""
+    anonymizer = FaceAnonymizer()
+    frame = np.full((480, 640, 3), 120, dtype=np.uint8)
+    person_box = [100.0, 50.0, 200.0, 350.0]
+
+    faces = anonymizer.detect_face_regions(frame, person_boxes=[person_box])
+    assert len(faces) >= 1
+    x1, y1, x2, y2 = faces[0]
+    assert x1 == 100
+    assert y1 == 50
+    assert x2 == 200
+    assert y2 < 200  # Head is top portion of person box
+
+
