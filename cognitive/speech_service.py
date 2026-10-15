@@ -19,10 +19,12 @@ class SpeechService:
         voice: str = "en_US",
         speaking_rate: float = 1.15,
         sample_rate_hz: int = 22050,
+        audio_sink: Optional[Any] = None,
     ) -> None:
         self.voice = voice
         self.speaking_rate = speaking_rate
         self.sample_rate = sample_rate_hz
+        self.audio_sink = audio_sink
 
         # Detect available speech backends
         self.has_piper = shutil.which("piper") is not None
@@ -34,7 +36,7 @@ class SpeechService:
         
         Args:
             text: Text string to speak (English, Hindi, Tamil, Malayalam).
-            play_audio: If True, dispatches sound to physical speakers.
+            play_audio: If True, dispatches sound to physical speakers or audio sink.
             
         Returns:
             Dict[str, Any]: Metadata containing duration, backend used, and synthesized PCM buffer.
@@ -92,6 +94,15 @@ class SpeechService:
         # Apply smooth modulation envelope
         modulation = np.abs(np.sin(2.0 * np.pi * 3.0 * t))
         pcm_samples = (synthetic_wave * modulation * 0.7).astype(np.float32)
+
+        if play_audio and self.audio_sink is not None:
+            try:
+                stereo_pcm = np.column_stack((pcm_samples, pcm_samples))
+                self.audio_sink.play_pcm(stereo_pcm)
+                audio_played = True
+                backend_used = f"audio_sink_{getattr(self.audio_sink, 'device', 'hal')}"
+            except Exception:
+                pass
 
         return {
             "success": True,

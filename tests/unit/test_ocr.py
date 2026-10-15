@@ -46,16 +46,30 @@ def test_ocr_image_preprocessing():
     assert unique_vals.issubset({0, 255})
 
 
-def test_ocr_text_extraction_headless():
-    """Verify headless text extraction returns structured dictionary with text and confidence."""
-    ocr = MultilingualOCREngine()
+def test_ocr_text_extraction_synthetic_mode():
+    """Verify synthetic text extraction when synthetic_mode is explicitly enabled."""
+    ocr = MultilingualOCREngine(synthetic_mode=True)
 
     test_img = np.zeros((100, 200, 3), dtype=np.uint8)
     test_img[40:60, 40:160, :] = 255  # High-contrast strip
 
     result = ocr.extract_text(test_img)
     assert "text" in result
+    assert result["text"] == "Drishti Pharmacy 500mg"
     assert "confidence" in result
     assert "script" in result
     assert result["confidence"] >= 0.0
+
+
+def test_ocr_production_no_hardcoded_fallback():
+    """Verify production OCR does not emit fake strings on blank or natural frames."""
+    ocr = MultilingualOCREngine(synthetic_mode=False)
+
+    test_img = np.zeros((100, 200, 3), dtype=np.uint8)
+    test_img[40:60, 40:160, :] = 255
+
+    result = ocr.extract_text(test_img)
+    # Should NOT return fake "Drishti Pharmacy 500mg"
+    assert result["text"] != "Drishti Pharmacy 500mg"
+
 

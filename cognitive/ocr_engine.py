@@ -19,10 +19,12 @@ class MultilingualOCREngine:
         languages: Optional[List[str]] = None,
         min_confidence: float = 60.0,
         unicode_normalization: str = "NFC",
+        synthetic_mode: bool = False,
     ) -> None:
         self.languages = languages or self.SUPPORTED_LANGUAGES
         self.min_confidence = min_confidence
         self.unicode_normalization = unicode_normalization
+        self.synthetic_mode = synthetic_mode
         self.pytesseract = None
 
         try:
@@ -110,8 +112,12 @@ class MultilingualOCREngine:
             except Exception:
                 pass
 
-        # Headless heuristic text extraction fallback for automated testing
-        return self._synthetic_text_extraction(preprocessed)
+        # Headless heuristic text extraction fallback ONLY if synthetic_mode is explicitly enabled
+        if self.synthetic_mode:
+            return self._synthetic_text_extraction(preprocessed)
+
+        # In production mode without synthetic flag: return honest empty extraction
+        return {"text": "", "script": "none", "confidence": 0.0, "lines": []}
 
     def _synthetic_text_extraction(self, preprocessed: np.ndarray) -> Dict[str, Any]:
         """Deterministic text extraction for headless CI testing."""
