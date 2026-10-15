@@ -6,7 +6,8 @@ and programmatic/synthetic event triggers for headless testing.
 
 from abc import ABC, abstractmethod
 from typing import Callable, Dict, List, Optional
-import queue
+import collections
+import threading
 import time
 
 
@@ -33,27 +34,22 @@ class SyntheticTriggerInput(BaseTriggerInput):
 
     def __init__(self) -> None:
         self.callbacks: Dict[int, List[Callable[[], None]]] = {1: [], 2: []}
-        self.event_queue: queue.Queue = queue.Queue()
+        self._events: collections.deque = collections.deque()
+        self._lock = threading.Lock()
 
     def poll_trigger(self, button_id: int) -> bool:
-        """Check if an event exists in the queue for this button."""
-        # Non-blocking check
-        items = []
-        triggered = False
-        while not self.event_queue.empty():
-            item = self.event_queue.get_nowait()
-            if item == button_id and not triggered:
-                triggered = True
-            else:
-                items.append(item)
-        # Put remaining back
-        for it in items:
-            self.event_queue.put(it)
-        return triggered
+        """Check if an event exists in the queue for this button in strict FIFO order."""
+        with self._lock:
+            for i, it in enumerate(self._events):
+                if it == button_id:
+                    del self._events[i]
+                    return True
+            return False
 
     def inject_trigger(self, button_id: int) -> None:
         """Simulate a user pressing a tactile button."""
-        self.event_queue.put(button_id)
+        with self._lock:
+            self._events.append(button_id)
         if button_id in self.callbacks:
             for cb in self.callbacks[button_id]:
                 cb()

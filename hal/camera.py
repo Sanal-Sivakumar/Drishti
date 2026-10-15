@@ -6,6 +6,9 @@ and headless synthetic frame generators for testing.
 
 from abc import ABC, abstractmethod
 from typing import Tuple, Dict, Any, Optional
+import os
+import shutil
+import subprocess
 import time
 import numpy as np
 
@@ -140,7 +143,6 @@ class V4L2CameraSource(BaseCameraSource):
     """Direct V4L2 raw video stream driver for Linux/laptop webcams without OpenCV dependency."""
 
     def __init__(self, device_path: str = "/dev/video0", width: int = 640, height: int = 480, fps: int = 30) -> None:
-        import subprocess
         self.device_path = device_path
         self.width = width
         self.height = height
@@ -148,6 +150,12 @@ class V4L2CameraSource(BaseCameraSource):
         self.frame_bytes = width * height * 3
         self.proc = None
         self.is_open = False
+
+        if not os.path.exists(device_path):
+            return
+
+        if not shutil.which("ffmpeg"):
+            return
 
         cmd = [
             "ffmpeg", "-loglevel", "quiet",
@@ -202,5 +210,46 @@ class V4L2CameraSource(BaseCameraSource):
             "fps": self.fps,
             "is_open": self.is_open,
         }
+
+
+def create_camera_source(
+    backend: str = "auto",
+    device_path: str = "/dev/video0",
+    width: int = 640,
+    height: int = 480,
+    fps: int = 30,
+) -> BaseCameraSource:
+    """Instantiate camera driver with automatic graceful fallback to synthetic generator."""
+    if backend == "synthetic":
+        return SyntheticCameraSource(width=width, height=height, fps=fps)
+
+    # 1. Try OpenCV if explicitly requested or auto
+    if backend in ("opencv", "auto"):
+        try:
+            cam = OpenCVCameraSource(device_index=0, width=width, height=height, fps=fps)
+            success, frame = cam.read_frame()
+            if success and frame is not None and frame.size > 0:
+                return cam
+            cam.release()
+        except Exception:
+            pass
+
+    # 2. Try V4L2 ffmpeg stream
+    if backend in ("v4l2", "auto"):
+        try:
+            cam = V4L2CameraSource(device_path=device_path, width=width, height=height, fps=fps)
+            success, frame = cam.read_frame()
+            if success and frame is not None and frame.size > 0:
+                return cam
+            cam.release()
+        except Exception:
+            pass
+
+    # 3. Graceful fallback to synthetic camera simulator
+    print(
+        f"[Camera HAL] Physical camera [{device_path}] unavailable or yielded empty frames. "
+        "Engaging autonomous SyntheticCameraSource fallback per system resiliency spec."
+    )
+    return SyntheticCameraSource(width=width, height=height, fps=fps)
 
 

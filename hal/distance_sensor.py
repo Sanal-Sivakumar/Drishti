@@ -92,17 +92,21 @@ class SyntheticDistanceSensor(BaseDistanceSensor):
 class VL53L1XSensor(BaseDistanceSensor):
     """Driver for physical VL53L1X Time-of-Flight sensor over I2C."""
 
-    def __init__(self, i2c_bus: int = 1, i2c_address: int = 0x29) -> None:
+    def __init__(self, i2c_bus: int = 1, i2c_address: int = 0x29, **kwargs) -> None:
         self.i2c_bus = i2c_bus
-        self.i2c_address = i2c_address
+        self.i2c_address = kwargs.get("address", i2c_address)
         self.sensor = None
         self.is_ranging = False
 
         try:
             import VL53L1X
-            self.sensor = VL53L1X.VL53L1X(i2c_bus=i2c_bus, i2c_address=i2c_address)
+            self.sensor = VL53L1X.VL53L1X(i2c_bus=self.i2c_bus, i2c_address=self.i2c_address)
             self.sensor.open()
-        except (ImportError, Exception):
+        except ImportError:
+            print(f"[HAL:ToF] Warning: VL53L1X driver not installed on host. Run 'pip install VL53L1X' on target.")
+            self.sensor = None
+        except Exception as e:
+            print(f"[HAL:ToF] Hardware notice: Could not connect to I2C bus {self.i2c_bus} at 0x{self.i2c_address:02x}: {e}")
             self.sensor = None
 
     def start_ranging(self) -> None:
@@ -110,8 +114,10 @@ class VL53L1XSensor(BaseDistanceSensor):
             try:
                 self.sensor.start_ranging(1)  # 1 = Short mode, 2 = Medium, 3 = Long
                 self.is_ranging = True
-            except Exception:
+            except Exception as e:
+                print(f"[HAL:ToF] Error starting ranging: {e}")
                 self.is_ranging = False
+
 
     def stop_ranging(self) -> None:
         if self.sensor is not None and self.is_ranging:
