@@ -1,15 +1,17 @@
-# Core Numerical & Computer Vision
+# Drishti Edge Assistive Wearable: Python Dependencies
+
+# Core Numerical, Signal Processing & Computer Vision
 numpy>=1.24.0
+scipy>=1.11.0
 Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+onnxruntime>=1.16.0
 pyyaml>=6.0.0
 
-# Testing & Quality
+# Cognitive & Hardware Abstraction Subsystems
+pytesseract>=0.3.10
+sounddevice>=0.4.6
+paho-mqtt>=2.0.0
+
+# Quality Assurance & Testing
 pytest>=8.0.0
-
-# Optional Hardware & Acceleration (installed when deploying to target hardware / CUDA)
-# opencv-python-headless>=4.8.0
-# onnxruntime>=1.16.0
-# pytesseract>=0.3.10
-# paho-mqtt>=1.6.1
-# sounddevice>=0.4.6
-

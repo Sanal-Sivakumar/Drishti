@@ -23,31 +23,36 @@ class IndianCurrencyRecognizer:
             "name": "Twenty rupees",
             "dimensions_mm": (129, 63),
             "aspect_ratio": 2.05,
-            "hue_center_deg": 48.0,  # Greenish Yellow
+            "hue_center_deg": 42.0,  # Greenish Yellow
+            "hue_tolerance": 12.0,
         },
         50: {
             "name": "Fifty rupees",
             "dimensions_mm": (135, 66),
             "aspect_ratio": 2.04,
             "hue_center_deg": 195.0, # Fluorescent Blue
+            "hue_tolerance": 16.0,
         },
         100: {
             "name": "One hundred rupees",
             "dimensions_mm": (142, 66),
             "aspect_ratio": 2.15,
             "hue_center_deg": 265.0, # Lavender
+            "hue_tolerance": 16.0,
         },
         200: {
             "name": "Two hundred rupees",
             "dimensions_mm": (146, 66),
             "aspect_ratio": 2.21,
-            "hue_center_deg": 55.0,  # Bright Yellow
+            "hue_center_deg": 58.0,  # Bright Yellow
+            "hue_tolerance": 12.0,
         },
         500: {
             "name": "Five hundred rupees",
             "dimensions_mm": (150, 66),
             "aspect_ratio": 2.27,
             "hue_center_deg": 110.0, # Stone Grey / Greenish
+            "hue_tolerance": 16.0,
         },
     }
 
@@ -55,10 +60,18 @@ class IndianCurrencyRecognizer:
         self.conf_thresh = confidence_threshold
 
     @staticmethod
-    def rgb_to_hsv_fast(rgb_image: np.ndarray) -> np.ndarray:
-        """Vectorized conversion of RGB image to HSV without external dependencies."""
-        img = rgb_image.astype(np.float32) / 255.0
-        r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+    def bgr_to_hsv_fast(image: np.ndarray, color_order: str = "BGR") -> np.ndarray:
+        """Vectorized conversion of BGR or RGB image to HSV without external dependencies.
+        
+        Args:
+            image: Input uint8 image array (H, W, 3).
+            color_order: "BGR" (default from camera/OpenCV) or "RGB".
+        """
+        img = image.astype(np.float32) / 255.0
+        if color_order.upper() == "BGR":
+            b, g, r = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+        else:
+            r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
 
         max_c = np.maximum(np.maximum(r, g), b)
         min_c = np.minimum(np.minimum(r, g), b)
@@ -90,6 +103,12 @@ class IndianCurrencyRecognizer:
 
         return np.stack([h, s, v], axis=-1)
 
+    @classmethod
+    def rgb_to_hsv_fast(cls, rgb_image: np.ndarray) -> np.ndarray:
+        """Backward-compatible RGB to HSV converter."""
+        return cls.bgr_to_hsv_fast(rgb_image, color_order="RGB")
+
+
     @staticmethod
     def compute_edge_density(image: np.ndarray) -> Tuple[float, float]:
         """Compute 2D spatial gradient magnitude and texture variance.
@@ -108,7 +127,10 @@ class IndianCurrencyRecognizer:
         return mean_density, std_density
 
     def classify_banknote(
-        self, crop_image: np.ndarray, bbox_aspect_ratio: Optional[float] = None
+        self,
+        crop_image: np.ndarray,
+        bbox_aspect_ratio: Optional[float] = None,
+        color_order: str = "BGR",
     ) -> Dict[str, Any]:
         """Classify a cropped banknote image using multi-stage physical and optical verification.
         
@@ -118,8 +140,9 @@ class IndianCurrencyRecognizer:
         3. Chromatic ink saturation and tight hue dispersion.
         
         Args:
-            crop_image: RGB image containing the candidate banknote.
+            crop_image: BGR or RGB image containing the candidate banknote.
             bbox_aspect_ratio: Optional width / height ratio of the bounding box.
+            color_order: "BGR" (default from camera/OpenCV) or "RGB".
             
         Returns:
             Dict[str, Any]: Classification result with denomination, spoken name, and confidence.
@@ -149,7 +172,7 @@ class IndianCurrencyRecognizer:
                 }
 
         # 2. Chromatic Ink Distribution
-        hsv = self.rgb_to_hsv_fast(crop_image)
+        hsv = self.bgr_to_hsv_fast(crop_image, color_order=color_order)
         sat_mask = (hsv[:, :, 1] > 0.18) & (hsv[:, :, 2] > 0.15)
         sat_count = int(np.sum(sat_mask))
         total_pixels = crop_image.shape[0] * crop_image.shape[1]
@@ -171,11 +194,12 @@ class IndianCurrencyRecognizer:
 
         for denom, profile in self.NOTE_PROFILES.items():
             ref_hue = profile["hue_center_deg"]
+            hue_tol = profile.get("hue_tolerance", 16.0)
             # Circular angular difference on 360-degree color wheel
             hue_diff = min(abs(mean_hue - ref_hue), 360.0 - abs(mean_hue - ref_hue))
 
-            # Strict angular tolerance: ink must be within 18 degrees of reference
-            if hue_diff > 18.0:
+            # Strict angular tolerance: ink must be within tolerance of reference
+            if hue_diff > hue_tol:
                 continue
 
             # Aspect ratio error calculation
@@ -186,7 +210,7 @@ class IndianCurrencyRecognizer:
                     continue
                 aspect_score = max(0.0, 1.0 - (aspect_err / 0.35))
 
-            hue_score = max(0.0, 1.0 - (hue_diff / 18.0))
+            hue_score = max(0.0, 1.0 - (hue_diff / hue_tol))
             # Weighted multi-stage confidence score
             conf = round(0.70 * hue_score + 0.30 * aspect_score, 3)
 

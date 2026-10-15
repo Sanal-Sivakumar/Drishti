@@ -49,16 +49,20 @@ class DrishtiMasterPipeline:
         self.currency_cooldown_s = currency_cooldown_s
 
         # Core Engines
+        is_synthetic = camera.__class__.__name__ == "SyntheticCameraSource"
         self.fast_pipeline = FastPerceptionPipeline(
             camera=self.camera,
             distance_sensor=self.distance_sensor,
             audio_sink=self.audio_sink,
         )
         self.currency_classifier = IndianCurrencyRecognizer()
-        self.ocr_engine = MultilingualOCREngine()
+        self.ocr_engine = MultilingualOCREngine(synthetic_mode=is_synthetic)
         self.vlm_narrator = VisionLanguageNarrator()
-        self.speech_service = SpeechService()
+        self.speech_service = SpeechService(audio_sink=self.audio_sink)
         self.anonymizer = FaceAnonymizer()
+
+        # Connect telemetry at startup
+        self.telemetry.connect()
 
         # Pipeline lifecycle state
         self.is_running = False
@@ -93,7 +97,11 @@ class DrishtiMasterPipeline:
                 y1, y2 = int(h * 0.15), int(h * 0.85)
                 x1, x2 = int(w * 0.15), int(w * 0.85)
                 crop = frame[y1:y2, x1:x2]
-                curr = self.currency_classifier.classify_banknote(crop)
+                crop_h, crop_w = crop.shape[:2]
+                crop_ar = crop_w / max(1.0, float(crop_h))
+                curr = self.currency_classifier.classify_banknote(
+                    crop, bbox_aspect_ratio=crop_ar, color_order="BGR"
+                )
                 denom = curr.get("denomination")
                 now = time.time()
                 if denom is not None:
@@ -125,22 +133,22 @@ class DrishtiMasterPipeline:
                 cycle_result["narration"] = narration
                 # Vocalize description
                 self.speech_service.speak(narration, play_audio=True)
-                # Dispatch caregiver event
-                self.telemetry.publish_emergency_alert(
-                    alert_type="USER_NARRATION_REQUEST",
-                    snapshot_metadata={"faces_redacted": redacted["faces_redacted"]}
+                # Dispatch informational event to caregiver gateway (non-emergency)
+                self.telemetry.publish_event(
+                    event_type="USER_NARRATION_REQUEST",
+                    details={"faces_redacted": redacted["faces_redacted"]}
                 )
 
         # Button 2: Currency Recognition & Multilingual OCR
-        elif self.trigger_input.poll_trigger(button_id=2):
+        if self.trigger_input.poll_trigger(button_id=2):
             cycle_result["event"] = "READING_OR_CURRENCY_TRIGGERED"
             frame = getattr(self.fast_pipeline, "last_frame", None)
             if frame is None:
                 _, frame = self.camera.read_frame()
 
             if frame is not None:
-                # Check for Indian Rupee banknote first
-                currency_res = self.currency_classifier.classify_banknote(frame)
+                # Check for Indian Rupee banknote first in BGR camera frame
+                currency_res = self.currency_classifier.classify_banknote(frame, color_order="BGR")
 
                 if currency_res["denomination"] is not None:
                     announcement = currency_res["spoken_name"]

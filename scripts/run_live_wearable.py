@@ -23,14 +23,15 @@ import time
 import signal
 import argparse
 import threading
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from hal.camera import BaseCameraSource, V4L2CameraSource, SyntheticCameraSource
+from hal.camera import BaseCameraSource, V4L2CameraSource, SyntheticCameraSource, OpenCVCameraSource, create_camera_source
 from hal.distance_sensor import BaseDistanceSensor, VL53L1XSensor, SyntheticDistanceSensor
 from hal.trigger_input import BaseTriggerInput, GPIOPushButtonTrigger, SyntheticTriggerInput
 from hal.audio_output import BaseAudioSink, ALSAAudioSink, HeadlessAudioRecorder
 from safety.telemetry import TelemetryClient
 from pipeline import DrishtiMasterPipeline
+from config.config_loader import get_pipeline_config, get_hardware_config
 
 
 class KeyboardTriggerThread(threading.Thread):
@@ -71,43 +72,58 @@ def is_raspberry_pi() -> bool:
         return False
 
 
-def build_hardware_stack(hardware_mode: str):
-    """Instantiate appropriate HAL drivers based on host environment."""
+def build_hardware_stack(hardware_mode: str, hw_cfg: Optional[Dict[str, Any]] = None):
+    """Instantiate appropriate HAL drivers based on host environment and config files."""
     if hardware_mode == "auto":
         hardware_mode = "rpi" if is_raspberry_pi() else "laptop"
 
+    hw_cfg = hw_cfg or get_hardware_config(profile=hardware_mode)
     print(f"[*] Target Architecture Selected: [{hardware_mode.upper()}]")
+
+    cam_cfg = hw_cfg.get("camera", {})
+    dist_cfg = hw_cfg.get("distance_sensor", {})
+    trig_cfg = hw_cfg.get("trigger_input", {})
+    audio_cfg = hw_cfg.get("audio_output", {})
+
+    width = cam_cfg.get("capture_width", 640)
+    height = cam_cfg.get("capture_height", 480)
+    fps = cam_cfg.get("fps", 30)
 
     if hardware_mode == "rpi":
         # Raspberry Pi 5 physical peripheral stack
-        print("    -> Camera: V4L2 /dev/video0 (Raspberry Pi Camera Module 3)")
-        camera: BaseCameraSource = V4L2CameraSource(device_path="/dev/video0", width=640, height=480, fps=30)
+        print("    -> Camera: Initializing Camera Module (with automatic fallback)")
+        camera = create_camera_source(backend="auto", device_path="/dev/video0", width=width, height=height, fps=fps)
 
-        print("    -> Distance: VL53L1X Time-of-Flight (I2C Bus 1, Address 0x29)")
+        i2c_bus = dist_cfg.get("i2c_bus", 1)
+        i2c_addr = dist_cfg.get("i2c_address", 0x29)
+        print(f"    -> Distance: ST VL53L1X Time-of-Flight (I2C Bus {i2c_bus}, Address 0x{i2c_addr:02X})")
         try:
-            distance_sensor: BaseDistanceSensor = VL53L1XSensor(i2c_bus=1, address=0x29)
+            distance_sensor: BaseDistanceSensor = VL53L1XSensor(i2c_bus=i2c_bus, i2c_address=i2c_addr)
         except Exception as e:
-            print(f"    [!] VL53L1X I2C initialization notice ({e}). Falling back to synthetic depth prior.")
+            print(f"    [!] VL53L1X I2C notice ({e}). Falling back to synthetic depth prior.")
             distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
 
-        print("    -> Tactile Input: Push Buttons on GPIO 17 (Narration) and GPIO 27 (Currency/OCR)")
+        pin_b1 = trig_cfg.get("pin_button_narration", 17)
+        pin_b2 = trig_cfg.get("pin_button_currency_ocr", 27)
+        print(f"    -> Tactile Input: Push Buttons on GPIO {pin_b1} (Narration) and GPIO {pin_b2} (Currency/OCR)")
         try:
-            trigger_input: BaseTriggerInput = GPIOPushButtonTrigger(pin_button_1=17, pin_button_2=27)
+            trigger_input: BaseTriggerInput = GPIOPushButtonTrigger(pin_button_1=pin_b1, pin_button_2=pin_b2)
         except Exception:
             print("    [!] GPIO library unavailable. Falling back to synthetic trigger input.")
             trigger_input = SyntheticTriggerInput()
 
-        print("    -> Audio Sink: ALSA direct device plughw:1,0 (Bone-Conduction Transducer)")
+        alsa_dev = audio_cfg.get("device_name", "default")
+        print(f"    -> Audio Sink: ALSA direct device {alsa_dev} (Bone-Conduction Transducer)")
         try:
-            audio_sink: BaseAudioSink = ALSAAudioSink(device="plughw:1,0")
+            audio_sink: BaseAudioSink = ALSAAudioSink(device=alsa_dev)
         except Exception:
-            print("    [!] ALSA plughw:1,0 unavailable. Falling back to default audio sink.")
+            print("    [!] ALSA audio device unavailable. Falling back to default audio sink.")
             audio_sink = ALSAAudioSink(device="default")
 
     elif hardware_mode == "laptop":
         # Workstation / Laptop developer stack
-        print("    -> Camera: Laptop integrated webcam on /dev/video0")
-        camera = V4L2CameraSource(device_path="/dev/video0", width=640, height=480, fps=30)
+        print("    -> Camera: Workstation webcam on /dev/video0 (with automatic fallback)")
+        camera = create_camera_source(backend="auto", device_path="/dev/video0", width=width, height=height, fps=fps)
 
         print("    -> Distance: Synthetic raycast distance simulator")
         distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
@@ -115,21 +131,21 @@ def build_hardware_stack(hardware_mode: str):
         print("    -> Tactile Input: Interactive Terminal Keyboard (N: Narration, C: Currency/OCR, Q: Quit)")
         synthetic_trigger = SyntheticTriggerInput()
         trigger_input = synthetic_trigger
-        # Start keyboard background thread
         kb_thread = KeyboardTriggerThread(synthetic_trigger)
         kb_thread.start()
 
-        print("    -> Audio Sink: Laptop speakers on plughw:1,0")
+        alsa_dev = audio_cfg.get("device_name", "default")
+        print(f"    -> Audio Sink: Audio output on {alsa_dev}")
         try:
-            audio_sink = ALSAAudioSink(device="plughw:1,0")
+            audio_sink = ALSAAudioSink(device=alsa_dev)
         except Exception:
-            print("    [!] plughw:1,0 unavailable. Using headless recorder with speech dispatcher.")
+            print(f"    [!] ALSA {alsa_dev} unavailable. Using headless recorder.")
             audio_sink = HeadlessAudioRecorder()
 
     else:
         # Pure headless synthetic simulation mode
         print("    -> Operating in deterministic headless simulation mode.")
-        camera = SyntheticCameraSource(width=640, height=480, fps=30)
+        camera = SyntheticCameraSource(width=width, height=height, fps=fps)
         distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
         trigger_input = SyntheticTriggerInput()
         audio_sink = HeadlessAudioRecorder()
@@ -174,11 +190,29 @@ def main() -> None:
     print("        DRISHTI ASSISTIVE WEARABLE: AUTONOMOUS LIVE SYSTEM")
     print("=" * 80)
 
-    # 1. Initialize HAL stack
-    camera, distance_sensor, trigger_input, audio_sink = build_hardware_stack(args.hardware)
-    telemetry = TelemetryClient(device_id="drishti-live-wearable")
+    # 1. Load Centralized Configurations
+    pipeline_cfg = get_pipeline_config()
+    hw_cfg = get_hardware_config(profile=args.hardware)
 
-    # 2. Build Master Pipeline
+    # 2. Initialize HAL stack from config
+    camera, distance_sensor, trigger_input, audio_sink = build_hardware_stack(args.hardware, hw_cfg=hw_cfg)
+    
+    # 3. Configure and Connect MQTT Telemetry
+    telem_cfg = pipeline_cfg.get("safety", {}).get("telemetry", {})
+    telemetry = TelemetryClient(
+        device_id="drishti-live-wearable",
+        broker_host=telem_cfg.get("broker_host", "localhost"),
+        broker_port=telem_cfg.get("broker_port", 1883),
+        use_tls=telem_cfg.get("use_tls", False),
+        qos=telem_cfg.get("qos", 1),
+    )
+    is_telem_connected = telemetry.connect()
+    if is_telem_connected:
+        print(f"[*] Telemetry: Connected to Caregiver Gateway at {telemetry.broker_host}:{telemetry.broker_port}")
+    else:
+        print(f"[*] Telemetry: Running offline buffer (broker at {telemetry.broker_host}:{telemetry.broker_port} unavailable)")
+
+    # 4. Build Master Pipeline
     pipeline = DrishtiMasterPipeline(
         camera=camera,
         distance_sensor=distance_sensor,
@@ -190,7 +224,7 @@ def main() -> None:
         currency_cooldown_s=args.currency_cooldown,
     )
 
-    # 3. Setup Graceful Shutdown Handler
+    # 5. Setup Graceful Shutdown Handler
     running = True
 
     def sigint_handler(signum, frame):
