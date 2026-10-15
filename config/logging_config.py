@@ -56,3 +56,4 @@ def get_logger(name: str) -> logging.Logger:
         logger_name = name
 
     return logging.getLogger(logger_name)
+

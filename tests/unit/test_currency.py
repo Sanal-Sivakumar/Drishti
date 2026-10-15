@@ -115,4 +115,37 @@ def test_twenty_vs_two_hundred_disambiguation():
     assert res_200["denomination"] == 200
 
 
+def test_identify_currency_contour_segmentation():
+    """Verify identify_currency extracts banknote contour from room frame and classifies."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.55)
+
+    # 640x480 room frame with user holding ₹50 note
+    frame = np.full((480, 640, 3), [120, 140, 160], dtype=np.uint8)
+    # Note placed in center: 80x160 pixels (aspect ratio 2.0)
+    frame[180:260, 240:400, :] = [230, 170, 60]  # BGR ₹50 note
+    frame[180:260:2, 240:400:2, :] += 25
+
+    res = rec.identify_currency(frame, color_order="BGR")
+    assert res["denomination"] == 50
+    assert "Fifty" in res["spoken_name"]
+    assert res["confidence"] >= 0.55
+    assert "bbox" in res
+    bx, by, bw, bh = res["bbox"]
+    assert 230 <= bx <= 250
+    assert 170 <= by <= 190
+
+
+def test_identify_currency_five_hundred_rupees():
+    """Verify ₹500 stone-grey/greenish note recognition."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.50)
+    note_500 = np.zeros((66, 145, 3), dtype=np.uint8)
+    note_500[:, :] = [100, 160, 130]  # BGR
+    note_500[::2, ::2, :] = np.clip(note_500[::2, ::2, :].astype(int) + 20, 0, 255).astype(np.uint8)
+
+    res = rec.classify_banknote(note_500, bbox_aspect_ratio=2.20, color_order="BGR")
+    assert res["denomination"] == 500
+    assert "Five hundred" in res["spoken_name"]
+
+
+
 

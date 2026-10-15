@@ -5,6 +5,7 @@ using color chromaticity distribution, aspect ratios, and feature classification
 """
 
 from typing import Dict, Any, Optional, Tuple
+import cv2
 import numpy as np
 
 
@@ -51,8 +52,8 @@ class IndianCurrencyRecognizer:
             "name": "Five hundred rupees",
             "dimensions_mm": (150, 66),
             "aspect_ratio": 2.27,
-            "hue_center_deg": 110.0, # Stone Grey / Greenish
-            "hue_tolerance": 16.0,
+            "hue_center_deg": 100.0, # Stone Grey / Greenish
+            "hue_tolerance": 22.0,
         },
     }
 
@@ -116,12 +117,12 @@ class IndianCurrencyRecognizer:
         Banknotes have dense intaglio guilloche patterns, numerals, and border lines.
         Smooth surfaces (human skin, clothes, walls) exhibit near-zero edge density.
         """
-        if image is None or image.shape[0] < 6 or image.shape[1] < 6:
+        if image is None or image.shape[0] < 4 or image.shape[1] < 4:
             return 0.0, 0.0
         # Convert to grayscale via ITU-R BT.601 luma weights
         gray = 0.299 * image[:, :, 0] + 0.587 * image[:, :, 1] + 0.114 * image[:, :, 2]
-        gx = np.abs(gray[:, 2:] - gray[:, :-2])
-        gy = np.abs(gray[2:, :] - gray[:-2, :])
+        gx = np.abs(gray[:, 1:] - gray[:, :-1])
+        gy = np.abs(gray[1:, :] - gray[:-1, :])
         mean_density = float(np.mean(gx) + np.mean(gy))
         std_density = float(np.std(gx) + np.std(gy))
         return mean_density, std_density
@@ -153,7 +154,7 @@ class IndianCurrencyRecognizer:
         # 1. Texture & Edge Density Verification
         edge_mean, edge_std = self.compute_edge_density(crop_image)
         # If no explicit aspect ratio is supplied, image MUST exhibit banknote engraving texture
-        if bbox_aspect_ratio is None and edge_mean < 14.0:
+        if bbox_aspect_ratio is None and edge_mean < 8.0 and edge_std < 4.0:
             return {
                 "denomination": None,
                 "spoken_name": "No note detected",
@@ -161,9 +162,9 @@ class IndianCurrencyRecognizer:
                 "reason": "insufficient_texture",
             }
 
-        # If aspect ratio is provided, verify it falls within paper currency geometry
+        # If aspect ratio is provided, verify it falls within paper currency geometry with tilt tolerance
         if bbox_aspect_ratio is not None:
-            if bbox_aspect_ratio < 1.60 or bbox_aspect_ratio > 2.60:
+            if bbox_aspect_ratio < 1.40 or bbox_aspect_ratio > 2.85:
                 return {
                     "denomination": None,
                     "spoken_name": "No note detected",
@@ -173,12 +174,12 @@ class IndianCurrencyRecognizer:
 
         # 2. Chromatic Ink Distribution
         hsv = self.bgr_to_hsv_fast(crop_image, color_order=color_order)
-        sat_mask = (hsv[:, :, 1] > 0.18) & (hsv[:, :, 2] > 0.15)
+        sat_mask = (hsv[:, :, 1] > 0.16) & (hsv[:, :, 2] > 0.14)
         sat_count = int(np.sum(sat_mask))
         total_pixels = crop_image.shape[0] * crop_image.shape[1]
 
-        # Banknotes must have significant ink saturation across at least 8% of area
-        if sat_count < max(20, int(0.08 * total_pixels)):
+        # Banknotes must have significant ink saturation across at least 6% of area
+        if sat_count < max(20, int(0.06 * total_pixels)):
             return {
                 "denomination": None,
                 "spoken_name": "No note detected",
@@ -206,9 +207,9 @@ class IndianCurrencyRecognizer:
             aspect_score = 1.0
             if bbox_aspect_ratio is not None:
                 aspect_err = abs(bbox_aspect_ratio - profile["aspect_ratio"])
-                if aspect_err > 0.35:
+                if aspect_err > 0.50:
                     continue
-                aspect_score = max(0.0, 1.0 - (aspect_err / 0.35))
+                aspect_score = max(0.0, 1.0 - (aspect_err / 0.50))
 
             hue_score = max(0.0, 1.0 - (hue_diff / hue_tol))
             # Weighted multi-stage confidence score
@@ -231,5 +232,61 @@ class IndianCurrencyRecognizer:
                 "spoken_name": "No note detected",
                 "confidence": best_confidence,
             }
+
+    def identify_currency(self, frame: np.ndarray, color_order: str = "BGR") -> Dict[str, Any]:
+        """Detect and classify any Indian Rupee banknote in a camera frame.
+        
+        Performs multi-channel edge & contour analysis to isolate the candidate
+        banknote bounding box from surrounding room/person backgrounds, extracts
+        the true banknote aspect ratio, and classifies the denomination.
+        
+        Falls back to center-crop evaluation if the banknote fills the camera frame.
+        """
+        if frame is None or frame.size == 0:
+            return {"denomination": None, "spoken_name": "No note detected", "confidence": 0.0}
+
+        h, w = frame.shape[:2]
+        total_pixels = h * w
+
+        # 1. Multi-channel edge contour analysis to isolate candidate banknote
+        edges = np.zeros((h, w), dtype=np.uint8)
+        for ch in range(3):
+            c_edges = cv2.Canny(frame[:, :, ch], 30, 100)
+            edges = cv2.bitwise_or(edges, c_edges)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dilated = cv2.dilate(edges, kernel, iterations=1)
+        contours, _ = cv2.findContours(dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+        best_candidate = None
+        best_conf = 0.0
+
+        for c in contours:
+            bx, by, bw, bh = cv2.boundingRect(c)
+            area = bw * bh
+            # Banknote should be large enough to read but not the whole frame
+            if area < 0.02 * total_pixels or area > 0.85 * total_pixels:
+                continue
+            ar = max(bw, bh) / max(1.0, min(bw, bh))
+            if 1.40 <= ar <= 2.85:
+                roi = frame[by:by + bh, bx:bx + bw]
+                res = self.classify_banknote(roi, bbox_aspect_ratio=ar, color_order=color_order)
+                if res.get("denomination") is not None and res["confidence"] > best_conf:
+                    best_conf = res["confidence"]
+                    best_candidate = res
+                    best_candidate["bbox"] = [bx, by, bw, bh]
+
+        if best_candidate is not None:
+            return best_candidate
+
+        # 2. Close-up center crop fallback (when note is held close and fills the lens)
+        y1, y2 = int(h * 0.15), int(h * 0.85)
+        x1, x2 = int(w * 0.15), int(w * 0.85)
+        crop = frame[y1:y2, x1:x2]
+        res_center = self.classify_banknote(crop, bbox_aspect_ratio=None, color_order=color_order)
+        if res_center.get("denomination") is not None:
+            return res_center
+
+        return {"denomination": None, "spoken_name": "No note detected", "confidence": 0.0}
 
 

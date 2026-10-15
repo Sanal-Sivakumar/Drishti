@@ -163,9 +163,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--continuous-currency",
+        dest="continuous_currency",
         action="store_true",
-        default=False,
-        help="Enable continuous automatic banknote recognition in background",
+        default=True,
+        help="Enable continuous automatic banknote recognition in background (default: True)",
+    )
+    parser.add_argument(
+        "--no-continuous-currency",
+        dest="continuous_currency",
+        action="store_false",
+        help="Disable continuous automatic banknote recognition",
     )
     parser.add_argument(
         "--currency-cooldown",

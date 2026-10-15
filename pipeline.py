@@ -24,6 +24,7 @@ from cognitive.speech_service import SpeechService
 from safety.anonymizer import FaceAnonymizer
 from safety.telemetry import TelemetryClient
 from config.logging_config import get_logger
+from config.config_loader import get_pipeline_config
 
 logger = get_logger("pipeline")
 
@@ -62,7 +63,19 @@ class DrishtiMasterPipeline:
         self.currency_classifier = IndianCurrencyRecognizer()
         self.ocr_engine = MultilingualOCREngine(synthetic_mode=is_synthetic)
         self.vlm_narrator = VisionLanguageNarrator()
-        self.speech_service = SpeechService(audio_sink=self.audio_sink)
+
+        # Load cognitive TTS config for natural speech pacing and tone
+        try:
+            tts_cfg = get_pipeline_config().get("cognitive", {}).get("tts", {})
+        except Exception:
+            tts_cfg = {}
+        self.speech_service = SpeechService(
+            voice=tts_cfg.get("default_language", "en_US"),
+            speaking_rate=tts_cfg.get("speaking_rate", 0.95),
+            voice_type=tts_cfg.get("voice_type", "female1"),
+            pitch=tts_cfg.get("pitch", 0),
+            audio_sink=self.audio_sink,
+        )
         self.anonymizer = FaceAnonymizer()
 
         # Connect telemetry at startup
@@ -96,16 +109,7 @@ class DrishtiMasterPipeline:
                 _, frame = self.camera.read_frame()
 
             if frame is not None and frame.size > 0:
-                h, w = frame.shape[:2]
-                # Center crop where user holds the banknote
-                y1, y2 = int(h * 0.15), int(h * 0.85)
-                x1, x2 = int(w * 0.15), int(w * 0.85)
-                crop = frame[y1:y2, x1:x2]
-                crop_h, crop_w = crop.shape[:2]
-                crop_ar = crop_w / max(1.0, float(crop_h))
-                curr = self.currency_classifier.classify_banknote(
-                    crop, bbox_aspect_ratio=crop_ar, color_order="BGR"
-                )
+                curr = self.currency_classifier.identify_currency(frame, color_order="BGR")
                 denom = curr.get("denomination")
                 now = time.time()
                 if denom is not None:
@@ -152,7 +156,7 @@ class DrishtiMasterPipeline:
 
             if frame is not None:
                 # Check for Indian Rupee banknote first in BGR camera frame
-                currency_res = self.currency_classifier.classify_banknote(frame, color_order="BGR")
+                currency_res = self.currency_classifier.identify_currency(frame, color_order="BGR")
 
                 if currency_res["denomination"] is not None:
                     announcement = currency_res["spoken_name"]

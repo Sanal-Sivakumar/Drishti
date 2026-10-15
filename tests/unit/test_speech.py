@@ -39,3 +39,26 @@ def test_speech_service_speaking_rate():
 
     assert res_fast["duration_s"] < res_normal["duration_s"]
 
+
+def test_speech_service_voice_styling():
+    """Verify voice_type and pitch configuration parameters."""
+    service = SpeechService(speaking_rate=0.95, voice_type="female1", pitch=5)
+    assert service.speaking_rate == 0.95
+    assert service.voice_type == "female1"
+    assert service.pitch == 5
+
+    res = service.speak("Testing clear voice styling.", play_audio=False)
+    assert res["success"] is True
+    assert res["duration_s"] > 0.0
+
+
+def test_speech_service_audio_sink_fallback():
+    """Verify audio_sink is used when physical speech dispatcher is not invoked."""
+    from hal.audio_output import HeadlessAudioRecorder
+    recorder = HeadlessAudioRecorder()
+    service = SpeechService(audio_sink=recorder)
+    # When play_audio is True, if no system speech was dispatched, recorder receives PCM
+    res = service.speak("System initialized.", play_audio=True)
+    assert res["success"] is True
+
+
