@@ -50,6 +50,15 @@ class FaceAnonymizer:
         if region.size == 0:
             return region
 
+        # 1. High-performance vectorized OpenCV GaussianBlur (sub-millisecond)
+        try:
+            import cv2
+            k = self.kernel_size if self.kernel_size % 2 == 1 else self.kernel_size + 1
+            return cv2.GaussianBlur(region, (k, k), sigmaX=self.sigma, sigmaY=self.sigma)
+        except Exception:
+            pass
+
+        # 2. SciPy N-dimensional Gaussian filter
         try:
             import scipy.ndimage as ndimage
             return ndimage.gaussian_filter(

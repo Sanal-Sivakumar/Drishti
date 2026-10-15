@@ -72,3 +72,22 @@ def test_stereo_waveform_synthesis():
     energy_right = np.sum(pcm[:, 1] ** 2)
     assert energy_right > energy_left
 
+
+def test_fractional_delay_interpolation():
+    """Verify fractional sample delay interpolation preserves continuous phase shift."""
+    synth = SpatialAudioSynthesizer(sample_rate_hz=44100)
+    sig = np.zeros(100, dtype=np.float32)
+    sig[10] = 1.0  # Unit impulse at n=10
+
+    # 1. Exact integer shift of 2.0 samples
+    delayed_int = synth.apply_fractional_delay(sig, 2.0)
+    assert np.isclose(delayed_int[12], 1.0, atol=1e-5)
+    assert np.isclose(delayed_int[11], 0.0, atol=1e-5)
+
+    # 2. Half-sample shift of 2.5 samples -> energy split equally between n=12 and n=13
+    delayed_frac = synth.apply_fractional_delay(sig, 2.5)
+    assert np.isclose(delayed_frac[12], 0.5, atol=1e-5)
+    assert np.isclose(delayed_frac[13], 0.5, atol=1e-5)
+    assert np.isclose(delayed_frac[11], 0.0, atol=1e-5)
+
+

@@ -112,9 +112,53 @@ class SpatialAudioSynthesizer:
         envelope = np.sin(np.pi * np.linspace(0, 1, num_samples, dtype=np.float32)) ** 2
         base_tone = np.sin(2.0 * np.pi * pitch_hz * t) * envelope
 
-        # Compute ITD time delay
+    @staticmethod
+    def apply_fractional_delay(signal: np.ndarray, delay_samples: float) -> np.ndarray:
+        """Apply fractional delay to 1D signal using linear sub-sample interpolation.
+        
+        Args:
+            signal: 1D input waveform array of shape (N,).
+            delay_samples: Non-negative delay in fractional samples.
+            
+        Returns:
+            np.ndarray: Delayed waveform of shape (N,), zero-padded at onset.
+        """
+        if delay_samples <= 0.0:
+            return signal.copy()
+        
+        n = len(signal)
+        orig_indices = np.arange(n, dtype=np.float32)
+        delayed_indices = orig_indices - delay_samples
+        return np.interp(delayed_indices, orig_indices, signal, left=0.0, right=0.0).astype(np.float32)
+
+    def synthesize_obstacle_ping(
+        self,
+        azimuth_rad: float,
+        distance_m: float,
+        duration_s: float = 0.06,
+    ) -> np.ndarray:
+        """Synthesize a binaural acoustic ping representing an obstacle's spatial position.
+        
+        Args:
+            azimuth_rad: Obstacle bearing in radians [-pi/2 to +pi/2].
+            distance_m: Obstacle distance in meters.
+            duration_s: Pulse duration in seconds (default 60ms).
+            
+        Returns:
+            np.ndarray: Stereo float32 PCM array of shape (N, 2), normalized to [-1.0, 1.0].
+        """
+        num_samples = int(self.sample_rate * duration_s)
+        t = np.linspace(0, duration_s, num_samples, endpoint=False, dtype=np.float32)
+
+        pitch_hz, _ = self.compute_pitch_and_pulse_rate(distance_m)
+
+        # Generate base tone with smooth Tukey / Hann amplitude envelope to prevent speaker click
+        envelope = np.sin(np.pi * np.linspace(0, 1, num_samples, dtype=np.float32)) ** 2
+        base_tone = np.sin(2.0 * np.pi * pitch_hz * t) * envelope
+
+        # Compute ITD time delay in fractional samples
         itd_seconds = self.compute_itd_seconds(azimuth_rad)
-        sample_shift = int(round(abs(itd_seconds) * self.sample_rate))
+        delay_samples = abs(itd_seconds) * self.sample_rate
 
         # Compute ILD gains
         gain_left, gain_right = self.compute_ild_gains(azimuth_rad)
@@ -122,14 +166,14 @@ class SpatialAudioSynthesizer:
         left_channel = np.copy(base_tone) * gain_left
         right_channel = np.copy(base_tone) * gain_right
 
-        # Apply delay via zero-padding (fractional delay approximation)
-        if sample_shift > 0:
+        # Apply continuous fractional delay for sub-sample spatial localization precision
+        if delay_samples > 0.001:
             if itd_seconds > 0:
                 # Sound comes from right -> left ear is delayed (contralateral)
-                left_channel = np.pad(left_channel, (sample_shift, 0), mode="constant")[:num_samples]
+                left_channel = self.apply_fractional_delay(left_channel, delay_samples)
             else:
                 # Sound comes from left -> right ear is delayed (contralateral)
-                right_channel = np.pad(right_channel, (sample_shift, 0), mode="constant")[:num_samples]
+                right_channel = self.apply_fractional_delay(right_channel, delay_samples)
 
         # Stack into (N, 2) stereo buffer
         stereo_pcm = np.column_stack([left_channel, right_channel]).astype(np.float32)
