@@ -9,6 +9,10 @@ from typing import Dict, Any, Optional
 import subprocess
 import shutil
 import numpy as np
+from hal.audio_output import BaseAudioSink
+from config.logging_config import get_logger
+
+logger = get_logger("cognitive.speech")
 
 
 class SpeechService:
@@ -19,7 +23,7 @@ class SpeechService:
         voice: str = "en_US",
         speaking_rate: float = 1.15,
         sample_rate_hz: int = 22050,
-        audio_sink: Optional[Any] = None,
+        audio_sink: Optional[BaseAudioSink] = None,
     ) -> None:
         self.voice = voice
         self.speaking_rate = speaking_rate
@@ -30,6 +34,12 @@ class SpeechService:
         self.has_piper = shutil.which("piper") is not None
         self.has_spdsay = shutil.which("spd-say") is not None
         self.has_espeak = (shutil.which("espeak") is not None or shutil.which("espeak-ng") is not None)
+        logger.debug(
+            "SpeechService initialized (piper=%s, spd-say=%s, espeak=%s)",
+            self.has_piper,
+            self.has_spdsay,
+            self.has_espeak,
+        )
 
     def speak(self, text: str, play_audio: bool = True) -> Dict[str, Any]:
         """Convert input text into spoken speech and optional audio playback.

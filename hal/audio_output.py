@@ -8,6 +8,9 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 import numpy as np
 import threading
+from config.logging_config import get_logger
+
+logger = get_logger("hal.audio")
 
 
 class BaseAudioSink(ABC):
@@ -132,7 +135,8 @@ class ALSAAudioSink(BaseAudioSink):
                 try:
                     self.sd.play(pcm_data, samplerate=sample_rate, blocking=True)
                     played = True
-                except Exception:
+                except Exception as e:
+                    logger.debug("sounddevice playback failed (%s); attempting aplay fallback", e)
                     played = False
 
             # Option B: Direct ALSA hardware aplay execution with wait() to prevent zombies
@@ -146,9 +150,16 @@ class ALSAAudioSink(BaseAudioSink):
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                    proc.communicate(input=int16_samples.tobytes(), timeout=1.0)
-                except Exception:
-                    pass
+                    duration_s = len(pcm_data) / max(sample_rate, 1)
+                    timeout = max(0.5, duration_s * 2.0)
+                    try:
+                        proc.communicate(input=int16_samples.tobytes(), timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        logger.warning("aplay playback timed out after %.2fs; killing PID %d", timeout, proc.pid)
+                        proc.kill()
+                        proc.wait(timeout=0.5)
+                except Exception as e:
+                    logger.debug("aplay direct execution failed for device %s: %s", self.device, e)
 
             self.audio_queue.task_done()
 

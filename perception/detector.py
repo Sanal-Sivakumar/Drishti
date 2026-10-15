@@ -8,6 +8,9 @@ from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 import os
 import numpy as np
+from config.logging_config import get_logger
+
+logger = get_logger("perception.detector")
 
 
 COCO_CLASSES = [
@@ -65,13 +68,13 @@ class HeadlessObjectDetector:
                     if p in available_providers
                 ]
                 self.ort_session = ort.InferenceSession(self.model_path, providers=chosen_providers)
-                print(f"[Detector] Loaded real YOLO model: {self.model_path} via {chosen_providers}")
+                logger.info("Loaded real YOLO model: %s via %s", self.model_path, chosen_providers)
             except Exception as e:
-                print(f"[Detector] Notice: Could not initialize ONNX Runtime session: {e}")
+                logger.warning("Could not initialize ONNX Runtime session: %s", e)
                 self.ort_session = None
         else:
             if not self.allow_synthetic_fallback:
-                print("[Detector] Warning: No ONNX model weights found at models/yolov8n.onnx.")
+                logger.warning("No ONNX model weights found at models/yolov8n.onnx.")
 
     @staticmethod
     def letterbox_image(
@@ -95,11 +98,15 @@ class HeadlessObjectDetector:
         pad_x = (target_w - new_w) // 2
         pad_y = (target_h - new_h) // 2
 
-        # Fast nearest/bilinear scaling using Pillow
-        from PIL import Image
-        pil_img = Image.fromarray(image)
-        resized_pil = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-        resized_arr = np.array(resized_pil)
+        # Fast scaling using OpenCV if available, falling back to Pillow
+        try:
+            import cv2
+            resized_arr = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        except ImportError:
+            from PIL import Image
+            pil_img = Image.fromarray(image)
+            resized_pil = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+            resized_arr = np.array(resized_pil)
 
         canvas = np.full((target_h, target_w, 3), 114, dtype=np.uint8)
         canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = resized_arr

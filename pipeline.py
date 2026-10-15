@@ -12,7 +12,7 @@ import time
 import threading
 import numpy as np
 
-from hal.camera import BaseCameraSource
+from hal.camera import BaseCameraSource, SyntheticCameraSource
 from hal.distance_sensor import BaseDistanceSensor
 from hal.trigger_input import BaseTriggerInput
 from hal.audio_output import BaseAudioSink
@@ -23,6 +23,9 @@ from cognitive.vlm_narrator import VisionLanguageNarrator
 from cognitive.speech_service import SpeechService
 from safety.anonymizer import FaceAnonymizer
 from safety.telemetry import TelemetryClient
+from config.logging_config import get_logger
+
+logger = get_logger("pipeline")
 
 
 class DrishtiMasterPipeline:
@@ -48,8 +51,9 @@ class DrishtiMasterPipeline:
         self.currency_interval = currency_interval
         self.currency_cooldown_s = currency_cooldown_s
 
-        # Core Engines
-        is_synthetic = camera.__class__.__name__ == "SyntheticCameraSource"
+        # Core Engines - robust synthetic mode detection via property and isinstance
+        is_synthetic = getattr(camera, "is_synthetic", False) or isinstance(camera, SyntheticCameraSource)
+        logger.info("Initializing DrishtiMasterPipeline (synthetic_mode=%s)", is_synthetic)
         self.fast_pipeline = FastPerceptionPipeline(
             camera=self.camera,
             distance_sensor=self.distance_sensor,

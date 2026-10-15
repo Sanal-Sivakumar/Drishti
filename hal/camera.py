@@ -11,10 +11,18 @@ import shutil
 import subprocess
 import time
 import numpy as np
+from config.logging_config import get_logger
+
+logger = get_logger("hal.camera")
 
 
 class BaseCameraSource(ABC):
     """Abstract base class for all camera input sources."""
+
+    @property
+    def is_synthetic(self) -> bool:
+        """Flag indicating whether the camera source is a synthetic generator."""
+        return False
 
     @abstractmethod
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
@@ -38,6 +46,10 @@ class BaseCameraSource(ABC):
 
 class SyntheticCameraSource(BaseCameraSource):
     """Deterministic, headless camera simulator for testing without physical sensors."""
+
+    @property
+    def is_synthetic(self) -> bool:
+        return True
 
     def __init__(self, width: int = 640, height: int = 480, fps: int = 30) -> None:
         self.width = width
@@ -115,7 +127,13 @@ class OpenCVCameraSource(BaseCameraSource):
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 self.cap.set(cv2.CAP_PROP_FPS, fps)
+            else:
+                logger.debug("OpenCV VideoCapture device index %d could not be opened.", device_index)
         except ImportError:
+            logger.debug("OpenCV (cv2) not installed; OpenCVCameraSource disabled.")
+            self.cap = None
+        except Exception as e:
+            logger.warning("Error initializing OpenCV camera device %d: %s", device_index, e)
             self.cap = None
 
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
@@ -152,9 +170,11 @@ class V4L2CameraSource(BaseCameraSource):
         self.is_open = False
 
         if not os.path.exists(device_path):
+            logger.debug("V4L2 camera path %s does not exist on filesystem.", device_path)
             return
 
         if not shutil.which("ffmpeg"):
+            logger.debug("ffmpeg executable not found in PATH; V4L2 raw stream disabled.")
             return
 
         cmd = [
@@ -175,7 +195,9 @@ class V4L2CameraSource(BaseCameraSource):
                 bufsize=self.frame_bytes * 2
             )
             self.is_open = True
-        except Exception:
+            logger.info("Spawned V4L2 ffmpeg capture stream for %s (%dx%d @ %d FPS).", device_path, width, height, fps)
+        except Exception as e:
+            logger.warning("Failed to spawn ffmpeg V4L2 stream for %s: %s", device_path, e)
             self.proc = None
             self.is_open = False
 
@@ -188,7 +210,8 @@ class V4L2CameraSource(BaseCameraSource):
                 frame = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3))
                 return True, frame
             return False, None
-        except Exception:
+        except Exception as e:
+            logger.debug("V4L2 read_frame exception: %s", e)
             return False, None
 
     def release(self) -> None:
@@ -196,10 +219,27 @@ class V4L2CameraSource(BaseCameraSource):
         if self.proc is not None:
             try:
                 self.proc.terminate()
-                self.proc.wait(timeout=0.5)
-            except Exception:
-                pass
+                try:
+                    self.proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    logger.warning("V4L2 ffmpeg process did not terminate within timeout; killing PID %d.", self.proc.pid)
+                    self.proc.kill()
+                    self.proc.wait(timeout=0.5)
+            except Exception as e:
+                logger.warning("Error releasing V4L2 process: %s", e)
             self.proc = None
+
+    def __enter__(self) -> "V4L2CameraSource":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.release()
+
+    def __del__(self) -> None:
+        try:
+            self.release()
+        except Exception:
+            pass
 
     def get_properties(self) -> Dict[str, Any]:
         return {
@@ -229,10 +269,11 @@ def create_camera_source(
             cam = OpenCVCameraSource(device_index=0, width=width, height=height, fps=fps)
             success, frame = cam.read_frame()
             if success and frame is not None and frame.size > 0:
+                logger.info("Successfully acquired hardware camera via OpenCV backend (device 0).")
                 return cam
             cam.release()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("OpenCV camera acquisition probe failed: %s", e)
 
     # 2. Try V4L2 ffmpeg stream
     if backend in ("v4l2", "auto"):
@@ -240,15 +281,17 @@ def create_camera_source(
             cam = V4L2CameraSource(device_path=device_path, width=width, height=height, fps=fps)
             success, frame = cam.read_frame()
             if success and frame is not None and frame.size > 0:
+                logger.info("Successfully acquired hardware camera via V4L2 raw stream (%s).", device_path)
                 return cam
             cam.release()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("V4L2 camera acquisition probe failed for %s: %s", device_path, e)
 
     # 3. Graceful fallback to synthetic camera simulator
-    print(
-        f"[Camera HAL] Physical camera [{device_path}] unavailable or yielded empty frames. "
-        "Engaging autonomous SyntheticCameraSource fallback per system resiliency spec."
+    logger.warning(
+        "Physical camera [%s] unavailable or yielded empty frames. "
+        "Engaging autonomous SyntheticCameraSource fallback per system resiliency spec.",
+        device_path,
     )
     return SyntheticCameraSource(width=width, height=height, fps=fps)
 

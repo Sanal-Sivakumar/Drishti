@@ -7,6 +7,9 @@ and headless synthetic range simulators for testing.
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 import numpy as np
+from config.logging_config import get_logger
+
+logger = get_logger("hal.distance")
 
 
 class BaseDistanceSensor(ABC):
@@ -103,10 +106,10 @@ class VL53L1XSensor(BaseDistanceSensor):
             self.sensor = VL53L1X.VL53L1X(i2c_bus=self.i2c_bus, i2c_address=self.i2c_address)
             self.sensor.open()
         except ImportError:
-            print(f"[HAL:ToF] Warning: VL53L1X driver not installed on host. Run 'pip install VL53L1X' on target.")
+            logger.warning("VL53L1X driver not installed on host. Run 'pip install VL53L1X' on target.")
             self.sensor = None
         except Exception as e:
-            print(f"[HAL:ToF] Hardware notice: Could not connect to I2C bus {self.i2c_bus} at 0x{self.i2c_address:02x}: {e}")
+            logger.warning("Could not connect to I2C bus %d at 0x%02x: %s", self.i2c_bus, self.i2c_address, e)
             self.sensor = None
 
     def start_ranging(self) -> None:
@@ -115,16 +118,15 @@ class VL53L1XSensor(BaseDistanceSensor):
                 self.sensor.start_ranging(1)  # 1 = Short mode, 2 = Medium, 3 = Long
                 self.is_ranging = True
             except Exception as e:
-                print(f"[HAL:ToF] Error starting ranging: {e}")
+                logger.error("Error starting VL53L1X ranging: %s", e)
                 self.is_ranging = False
-
 
     def stop_ranging(self) -> None:
         if self.sensor is not None and self.is_ranging:
             try:
                 self.sensor.stop_ranging()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Exception stopping VL53L1X ranging: %s", e)
             self.is_ranging = False
 
     def get_distance_meters(self) -> Optional[float]:
