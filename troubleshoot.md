@@ -267,6 +267,9 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 ```
 [System Failure Detected]
            |
+           +---> Quick Comprehensive Diagnostic:
+           |        +---> Run: `python3 scripts/check_hardware_health.py`
+           |
            +---> Camera stream black/empty?
            |        +---> Check: `fuser -v /dev/video0` -> kill zombie holders
            |        +---> Check: Camera Module 3 ribbon polarity -> blue tape to ports
@@ -285,4 +288,40 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
                     +---> Check: `vcgencmd get_throttled` -> check power adapter (needs 5V/5A)
                     +---> Check: Verify INT8 model is loaded rather than FP32
 ```
+
+---
+
+## 8. Automated Diagnostics & Configuration Recovery
+
+### 8.1 Non-Destructive Hardware Health Check
+Run the automated peripheral audit tool to verify cameras, I2C range sensors, ALSA sound devices, and ONNX runtime environments:
+```bash
+python3 scripts/check_hardware_health.py
+```
+- **Exit Code 0**: All hardware peripherals and neural weights verified operational.
+- **Exit Code 1**: One or more critical subsystems absent; review the displayed diagnostic checklist.
+
+### 8.2 Configuration Schema Validation (`ConfigValidationError`)
+When editing `config/pipeline_config.yaml`, `config/hardware_dev.yaml`, or `config/hardware_pi5.yaml`:
+- **Symptom**: `ConfigValidationError: Invalid pipeline.target_fps: -5 (must be in 1..120)`
+- **Root Cause**: A numerical threshold or peripheral backend was configured outside valid physical limits.
+- **Remediation**:
+  1. Ensure `confidence_threshold` is between `0.0` and `1.0`.
+  2. Ensure `frame_width` and `frame_height` are positive integers.
+  3. Ensure camera backend is one of `synthetic`, `opencv`, `v4l2`, `libcamera`, or `auto`.
+
+### 8.3 Neural Model Integrity & SHA-256 Checksums
+- **Symptom**: `[!] FAILED: The following required models could not be verified: yolov8n.onnx`
+- **Root Cause**: Download was truncated or tampered with, failing SHA-256 integrity verification.
+- **Remediation**:
+  Re-run `python3 scripts/download_models.py`. The downloader automatically queries redundant mirrors (`yakhyo/people-tracker`, `CVHub520/X-AnyLabeling`) and validates against official SHA-256 checksums before installing.
+
+### 8.4 Enabling Structured Verbose Debug Logs
+To diagnose runtime exceptions or trace sub-millisecond perception loops:
+```bash
+export DRISHTI_LOG_LEVEL=DEBUG
+python3 scripts/run_live_wearable.py --hardware laptop
+```
+All subsystems emit ISO-timestamped log records under the `drishti.*` namespace.
+
 

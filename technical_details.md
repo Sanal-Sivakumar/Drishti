@@ -471,11 +471,24 @@ The time delay between the two ears is:
 $$\Delta t_{ITD}(\theta) = \frac{r}{c} (\theta + \sin\theta)$$
 
 Let us calculate the maximum physical delay when sound arrives directly from the right ($\theta = 90^\circ = \frac{\pi}{2} \text{ rad}$):
-$$\Delta t_{ITD, max} = \frac{0.0875}{343} \left( \frac{\pi}{2} + \sin\frac{\pi}{2} \right) = \frac{0.0875}{343} (1.5708 + 1.0) \approx 0.000655 \text{ seconds} = 655 \;\mu\text{s}$$
-
 The human auditory brainstem (specifically the Medial Superior Olive) detects interaural phase shifts as small as **$10 \;\mu\text{s}$**, allowing humans to localize azimuth with $1^\circ$ precision.
 
-### 8.3 Interaural Level Difference (ILD)
+### 8.3 Continuous Fractional Sample Delay Interpolation
+In digital discrete-time processing with sampling rate $f_s = 44,100\text{ Hz}$, the sampling interval is $T_s = \frac{1}{f_s} \approx 22.67 \;\mu\text{s}$.
+An ITD delay of $\tau = 655.4 \;\mu\text{s}$ corresponds to a non-integer sample shift:
+$$D = \tau \times f_s = 0.0006554 \times 44,100 \approx 28.903 \text{ samples}$$
+
+Rounding $D$ to the nearest integer ($29$ samples) introduces a phase discretization error of up to $\pm 11.3 \;\mu\text{s}$—exceeding the human brainstem's $10 \;\mu\text{s}$ threshold and causing audible angular localization jitter or "jumping" as an obstacle moves continuously across the field of view.
+
+Drishti implements **continuous sub-sample fractional delay filtering** via linear interpolation. Decomposing the total delay into integer and fractional components:
+$$D = D_{\text{int}} + d, \quad D_{\text{int}} = \lfloor D \rfloor, \quad 0 \le d < 1$$
+
+The delayed continuous discrete-time output is evaluated at arbitrary fractional indices:
+$$y[n] = x(n - D) = (1 - d) \cdot x[n - D_{\text{int}}] + d \cdot x[n - D_{\text{int}} - 1]$$
+
+This continuous formulation yields sub-sample phase precision, smooth auditory motion trajectories without discretization artifacts, and negligible computational overhead ($O(N)$ vectorized linear interpolation).
+
+### 8.4 Interaural Level Difference (ILD)
 The speed of sound in air is $c = f \lambda$. At $1.5\text{ kHz}$, the acoustic wavelength is:
 $$\lambda = \frac{343\text{ m/s}}{1500\text{ Hz}} \approx 0.228 \text{ m} = 22.8 \text{ cm}$$
 

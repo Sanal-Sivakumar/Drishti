@@ -139,8 +139,10 @@ Drishti/
 ├── TEAM_HANDOVER.md          # Contributor standards, latency budgets, headless testing rules
 ├── technical_details.md      # Beginner-to-advanced first-principles theory & math derivations
 ├── troubleshoot.md           # Operational failure modes, diagnostics, and permanent fixes
-├── config/                   # Hardware and pipeline configuration schemas
-│   ├── config_loader.py      # Centralized YAML configuration loader
+├── pyproject.toml            # Project packaging metadata, Ruff, Mypy, and Pytest configuration
+├── config/                   # Hardware, logging, and pipeline configuration schemas
+│   ├── config_loader.py      # Centralized YAML configuration loader with schema validation
+│   ├── logging_config.py     # Centralized structured logging for field debugging
 │   ├── hardware_dev.yaml     # Workstation webcam and synthetic sensor setup
 │   ├── hardware_pi5.yaml     # Raspberry Pi 5 pinout, I2C bus, CSI configs
 │   └── pipeline_config.yaml  # Detection thresholds, audio frequencies, priority rules
@@ -155,16 +157,17 @@ Drishti/
 │   ├── detector.py           # Real ONNX YOLOv8 obstacle detector with NMS
 │   ├── depth_fusion.py       # 2D bounding box to 3D spatial ray-cone depth fusion
 │   ├── currency.py           # BGR Indian currency note recognizer with edge gating
-│   └── spatial_audio.py      # Binaural acoustic synthesizer (ITD + ILD + PRF)
+│   └── spatial_audio.py      # Binaural acoustic synthesizer (ITD + ILD + PRF + Fractional Delay)
 ├── cognitive/                # On-Demand Semantic Subsystem
 │   ├── ocr_engine.py         # Multilingual Indic OCR (Eng, Hin, Tam, Mal via pytesseract)
 │   ├── vlm_narrator.py       # Multimodal spatial scene describer & ONNX VLM runner
 │   └── speech_service.py     # Speech synthesis with direct HAL audio sink routing
 ├── safety/                   # Privacy Masking & Telemetry
-│   ├── anonymizer.py         # Vectorized Gaussian face & head redaction filter
+│   ├── anonymizer.py         # Vectorized Gaussian face & head redaction filter (cv2 / scipy)
 │   └── telemetry.py          # Mosquitto MQTT client (TLS 1.3, QoS 1, paho v2)
 ├── scripts/                  # Autonomous deployment & demonstration runners
-│   ├── download_models.py    # Neural model download & integrity verification
+│   ├── check_hardware_health.py # Non-destructive hardware diagnostics & health probe
+│   ├── download_models.py    # Neural model download & SHA-256 integrity verification
 │   ├── run_live_wearable.py  # Production continuous live wearable runner
 │   └── run_phase*.py         # Subsystem demonstration harnesses
 ├── pipeline.py               # Master headless pipeline orchestrator
@@ -215,15 +218,18 @@ source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
-# Download official neural model weights (YOLOv8n ONNX)
+# Download official neural model weights with SHA-256 integrity verification
 python3 scripts/download_models.py
+
+# Run non-destructive hardware peripheral diagnostics
+python3 scripts/check_hardware_health.py
 ```
 
 ### 3. Running Headless Verification Tests
 The entire test suite runs completely headless without requiring physical cameras, I2C sensors, audio output hardware, or GUI display servers:
 
 ```bash
-# Run complete test suite (41 unit and integration tests)
+# Run complete test suite (46 unit and integration tests)
 pytest tests/ -v
 ```
 

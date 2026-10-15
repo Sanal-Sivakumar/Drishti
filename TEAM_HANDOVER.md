@@ -79,13 +79,13 @@ Before merging any code into `main`, every pull request must pass three verifica
 ruff check . tests/
 mypy .
 ```
-All functions must have comprehensive type hints (`typing.Optional`, `typing.Tuple`, `dataclass`).
+All configuration is centralized in `pyproject.toml`. All functions must have comprehensive type hints (`typing.Optional`, `typing.Tuple`, `dataclass`).
 
 ### Gate 2: Headless Unit & Integration Tests
 ```bash
 pytest tests/ -v --cov=. --cov-report=term-missing
 ```
-Minimum acceptable line coverage across core modules is $85\%$.
+All 46 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
 
 ### Gate 3: Quantitative Latency Budget Check
 Every perception and audio commit must be benchmarked against latency limits:
@@ -99,6 +99,12 @@ Every perception and audio commit must be benchmarked against latency limits:
 | **End-to-End Fast Obstacle Alert** | $\mathbf{\le 80 \text{ ms}}$ | $\mathbf{\le 20 \text{ ms}}$ |
 | **Multilingual OCR Recognition** | $\le 650 \text{ ms}$ | $\le 180 \text{ ms}$ |
 | **VLM Scene Caption (On-Demand)** | $\le 2500 \text{ ms}$ | $\le 600 \text{ ms}$ |
+
+### Gate 4: Hardware Health Diagnostics
+Before running physical hardware on target kits (Raspberry Pi 5 or development laptop), run the non-destructive diagnostic check:
+```bash
+python3 scripts/check_hardware_health.py
+```
 
 ---
 
@@ -122,13 +128,15 @@ As of the current milestone, the engineering baseline stands as follows:
 
 | Subsystem / Phase | Current State | Verification Passed |
 | :--- | :--- | :--- |
-| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2/OpenCV physical camera with auto-fallback + ALSA persistent thread output | `tests/unit/test_hal.py` (4/4 PASSED) |
-| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector, 3D Spatial Audio (ITD + ILD + PRF), Ray-Cone Depth Fusion, BGR INR Banknote Classifier with Edge Gating | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (15/15 PASSED) |
-| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), Multimodal Spatial Scene Narrator & ONNX VLM runner, Local Speech with Audio Sink routing | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (10/10 PASSED) |
-| **Phase 3: Safety & Telemetry** | Local 2D Vectorized Gaussian Face Redaction, Mosquitto MQTT Telemetry (TLS 1.3, QoS 1, paho v2), Master Orchestrator | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/integration/test_pipeline.py` (12/12 PASSED) |
-| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0` / `default`), and synthetic fallback tested live | `scripts/run_phase1_perception.py`, `scripts/run_phase2_cognitive.py`, `scripts/run_phase3_full_system.py`, `scripts/run_live_wearable.py` |
-| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) with model verification | `.github/workflows/ci.yml` (41/41 Tests Passing) |
+| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2/OpenCV physical camera with process lifecycle management (`__enter__`/`__exit__`, `kill()` on timeout) + ALSA non-blocking worker thread | `tests/unit/test_hal.py` (4/4 PASSED) |
+| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector with direct OpenCV letterboxing, 3D Spatial Audio (Continuous Fractional Delay interpolation via `np.interp`, ITD + ILD + PRF), Ray-Cone Depth Fusion, BGR INR Banknote Classifier with Edge Gating | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (16/16 PASSED) |
+| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), Multimodal Spatial Scene Narrator & ONNX VLM runner, Local Speech with Audio Sink routing & typed interfaces | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (10/10 PASSED) |
+| **Phase 3: Safety & Telemetry** | Local 2D Vectorized Gaussian Face Redaction (`cv2.GaussianBlur` priority with scipy/numpy fallbacks), Mosquitto MQTT Telemetry (TLS 1.3, QoS 1, paho v2), Master Orchestrator | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/integration/test_pipeline.py` (12/12 PASSED) |
+| **Config & Tooling** | Strict schema validation (`validate_pipeline_config`, `validate_hardware_config`), `pyproject.toml` standardized tooling, Hardware health diagnostic CLI (`scripts/check_hardware_health.py`) | `tests/unit/test_config_loader.py` (4/4 PASSED) |
+| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0` / `default`), and synthetic fallback tested live; non-destructive hardware health auditor | `scripts/check_hardware_health.py`, `scripts/run_phase1_perception.py`, `scripts/run_phase2_cognitive.py`, `scripts/run_phase3_full_system.py`, `scripts/run_live_wearable.py` |
+| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) with model SHA-256 verification and `pyproject.toml` packaging | `.github/workflows/ci.yml` (46/46 Tests Passing) |
 | **Next Tasks (Phase 4)** | Hailo-8L NPU pipeline acceleration, 3D wearable enclosure, and field navigation trials | Scheduled |
+
 
 
 

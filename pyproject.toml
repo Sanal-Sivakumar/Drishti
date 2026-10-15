@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drishti"
+version = "1.0.0"
+description = "Assistive Edge-AI Wearable for Visually Impaired Spatial Navigation"
+readme = "README.md"
+license = { text = "GPL-3.0" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Drishti Team", email = "sanalsiva2005@gmail.com" }
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "Pillow>=10.0.0",
+    "opencv-python-headless>=4.8.0",
+    "onnxruntime>=1.16.0",
+    "pyyaml>=6.0.0",
+    "pytesseract>=0.3.10",
+    "sounddevice>=0.4.6",
+    "paho-mqtt>=2.0.0",
+    "pytest>=8.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
