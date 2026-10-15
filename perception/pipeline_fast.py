@@ -38,6 +38,7 @@ class FastPerceptionPipeline:
         # Start active range sensing
         self.distance_sensor.start_ranging()
         self.last_frame: Optional[np.ndarray] = None
+        self.last_ping_time: float = 0.0
 
     def step(self) -> Dict[str, Any]:
         """Execute a single perception, fusion, and spatial audio cycle.
@@ -68,20 +69,15 @@ class FastPerceptionPipeline:
         raw_detections = self.detector.detect(frame)
         t_detect = (time.perf_counter() - t0) * 1000.0
 
-        # 4. Ray-Cone Spatial Depth Fusion
+        # 4. Ray-Cone Spatial Depth Fusion with Multi-Obstacle Disambiguation
         t0 = time.perf_counter()
-        fused_obstacles: List[Dict[str, Any]] = []
-        for det in raw_detections:
-            fused = self.depth_fuser.fuse_detection(
-                bbox=tuple(det["bbox"]),
-                class_name=det["class_name"],
-                confidence=det["confidence"],
-                tof_distance_m=tof_dist_m,
-            )
-            fused_obstacles.append(fused)
+        fused_obstacles = self.depth_fuser.fuse_all_detections(
+            raw_detections=raw_detections,
+            tof_distance_m=tof_dist_m,
+        )
         t_fuse = (time.perf_counter() - t0) * 1000.0
 
-        # 5. Select Primary Hazard & Synthesize 3D Binaural Cue
+        # 5. Select Primary Hazard & Synthesize 3D Binaural Cue with PRF Scheduling
         t0 = time.perf_counter()
         primary_hazard: Optional[Dict[str, Any]] = None
         audio_synthesized = False
@@ -91,14 +87,22 @@ class FastPerceptionPipeline:
             fused_obstacles.sort(key=lambda o: o["distance_m"])
             primary_hazard = fused_obstacles[0]
 
-            # Generate spatial audio ping
-            azimuth_rad = primary_hazard["azimuth_rad"]
             dist_m = primary_hazard["distance_m"]
-            stereo_pcm = self.audio_synthesizer.synthesize_obstacle_ping(
-                azimuth_rad=azimuth_rad, distance_m=dist_m, duration_s=0.06
-            )
-            self.audio_sink.play_pcm(stereo_pcm, sample_rate=self.audio_synthesizer.sample_rate)
-            audio_synthesized = True
+            azimuth_rad = primary_hazard["azimuth_rad"]
+
+            # Obey biological sonar Pulse Repetition Frequency (PRF)
+            _, pulse_rate_hz = self.audio_synthesizer.compute_pitch_and_pulse_rate(dist_m)
+            min_interval_s = 1.0 / max(pulse_rate_hz, 0.5)
+            now = time.time()
+
+            if (now - self.last_ping_time) >= min_interval_s:
+                stereo_pcm = self.audio_synthesizer.synthesize_obstacle_ping(
+                    azimuth_rad=azimuth_rad, distance_m=dist_m, duration_s=0.06
+                )
+                self.audio_sink.play_pcm(stereo_pcm, sample_rate=self.audio_synthesizer.sample_rate)
+                audio_synthesized = True
+                self.last_ping_time = now
+
 
         t_audio = (time.perf_counter() - t0) * 1000.0
         t_total = (time.perf_counter() - t_start) * 1000.0

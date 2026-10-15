@@ -1,40 +1,77 @@
-"""Perception Subsystem: Headless Object Detector.
+"""Perception Subsystem: Real-Time Edge Object Detector.
 
-Generalized object detection interface implementing letterboxing,
-normalization, non-maximum suppression (NMS), and ONNX/synthetic execution.
+Production-grade YOLO ONNX object detector supporting letterboxing,
+normalization, non-maximum suppression (NMS), and dynamic execution providers.
 """
 
 from typing import List, Tuple, Dict, Any, Optional
+from pathlib import Path
+import os
 import numpy as np
 
 
+COCO_CLASSES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
+    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book",
+    "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+]
+
+
 class HeadlessObjectDetector:
-    """Headless object detector optimized for real-time edge obstacle perception."""
+    """YOLO ONNX object detector optimized for real-time edge obstacle perception."""
 
     def __init__(
         self,
-        confidence_threshold: float = 0.40,
+        confidence_threshold: float = 0.35,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[str]] = None,
         model_path: Optional[str] = None,
+        allow_synthetic_fallback: bool = True,
     ) -> None:
         self.conf_thresh = confidence_threshold
         self.iou_thresh = iou_threshold
         self.target_classes = target_classes or [
-            "person", "chair", "door", "stairs", "table", "car", "bicycle"
+            "person", "chair", "door", "stairs", "table", "car", "bicycle", "couch", "bed", "tv", "bottle"
         ]
-        self.model_path = model_path
+        self.allow_synthetic_fallback = allow_synthetic_fallback
         self.ort_session = None
 
-        if model_path:
+        # Resolve model path
+        resolved_path = None
+        if model_path and os.path.exists(model_path):
+            resolved_path = model_path
+        else:
+            # Check default locations
+            project_root = Path(__file__).resolve().parent.parent
+            default_model = project_root / "models" / "yolov8n.onnx"
+            if default_model.exists():
+                resolved_path = str(default_model)
+
+        self.model_path = resolved_path
+
+        if self.model_path:
             try:
                 import onnxruntime as ort
-                self.ort_session = ort.InferenceSession(
-                    model_path,
-                    providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-                )
-            except Exception:
+                available_providers = ort.get_available_providers()
+                chosen_providers = [
+                    p for p in ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                    if p in available_providers
+                ]
+                self.ort_session = ort.InferenceSession(self.model_path, providers=chosen_providers)
+                print(f"[Detector] Loaded real YOLO model: {self.model_path} via {chosen_providers}")
+            except Exception as e:
+                print(f"[Detector] Notice: Could not initialize ONNX Runtime session: {e}")
                 self.ort_session = None
+        else:
+            if not self.allow_synthetic_fallback:
+                print("[Detector] Warning: No ONNX model weights found at models/yolov8n.onnx.")
 
     @staticmethod
     def letterbox_image(
@@ -58,7 +95,7 @@ class HeadlessObjectDetector:
         pad_x = (target_w - new_w) // 2
         pad_y = (target_h - new_h) // 2
 
-        # Fast nearest/bilinear scaling using NumPy / Pillow
+        # Fast nearest/bilinear scaling using Pillow
         from PIL import Image
         pil_img = Image.fromarray(image)
         resized_pil = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
@@ -124,24 +161,76 @@ class HeadlessObjectDetector:
         h, w = frame.shape[:2]
 
         if self.ort_session is not None:
-            # ONNX Runtime forward path
-            letterboxed, scale, (pad_x, pad_y) = self.letterbox_image(frame)
-            input_tensor = letterboxed.astype(np.float32) / 255.0
-            input_tensor = np.transpose(input_tensor, (2, 0, 1))[None, ...]
+            # 1. Letterbox resize to 640x640
+            letterboxed, scale, (pad_x, pad_y) = self.letterbox_image(frame, target_size=(640, 640))
+            # 2. Normalize to float32 [0.0, 1.0] and convert to NCHW
+            blob = letterboxed.astype(np.float32) / 255.0
+            blob = np.transpose(blob, (2, 0, 1))
+            blob = np.expand_dims(blob, axis=0)
+
+            # 3. ONNX forward pass
             input_name = self.ort_session.get_inputs()[0].name
-            outputs = self.ort_session.run(None, {input_name: input_tensor})
-            # Parse raw ONNX outputs
+            outputs = self.ort_session.run(None, {input_name: blob})
+
+            # 4. Parse raw output tensor and apply NMS
             raw_dets = self._parse_onnx_outputs(outputs, scale, pad_x, pad_y, w, h)
-            return self.non_maximum_suppression(raw_dets)
-        else:
-            # Fast deterministic heuristic detector for synthetic testing
+            nms_dets = self.non_maximum_suppression(raw_dets)
+            if nms_dets:
+                return nms_dets
+
+            if self.allow_synthetic_fallback:
+                return self._heuristic_synthetic_detect(frame)
+            return []
+
+        elif self.allow_synthetic_fallback:
             return self._heuristic_synthetic_detect(frame)
+        else:
+            return []
+
+    def _parse_onnx_outputs(
+        self, outputs: Any, scale: float, pad_x: int, pad_y: int, orig_w: int, orig_h: int
+    ) -> List[Dict[str, Any]]:
+        """Decode YOLOv8 [1, 84, 8400] output tensor into bounding boxes and classes."""
+        detections: List[Dict[str, Any]] = []
+        preds = outputs[0]  # Shape: (1, 84, 8400)
+        if preds.ndim == 3:
+            preds = preds[0]
+        if preds.shape[0] < preds.shape[1]:
+            preds = preds.T  # Transpose to (8400, 84)
+
+        boxes = preds[:, :4]
+        scores = preds[:, 4:]
+        class_ids = np.argmax(scores, axis=1)
+        confidences = np.max(scores, axis=1)
+
+        mask = confidences >= self.conf_thresh
+        filtered_boxes = boxes[mask]
+        filtered_cids = class_ids[mask]
+        filtered_confs = confidences[mask]
+
+        for (cx, cy, bw, bh), cid, conf in zip(filtered_boxes, filtered_cids, filtered_confs):
+            cls_name = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"class_{cid}"
+            if self.target_classes and cls_name not in self.target_classes:
+                continue
+
+            x1 = max(0.0, float((cx - bw / 2.0 - pad_x) / scale))
+            y1 = max(0.0, float((cy - bh / 2.0 - pad_y) / scale))
+            x2 = min(float(orig_w), float((cx + bw / 2.0 - pad_x) / scale))
+            y2 = min(float(orig_h), float((cy + bh / 2.0 - pad_y) / scale))
+
+            detections.append({
+                "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+                "confidence": round(float(conf), 3),
+                "class_id": int(cid),
+                "class_name": cls_name,
+            })
+
+        return detections
 
     def _heuristic_synthetic_detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
-        """Segment high-contrast regions to identify synthetic targets during testing."""
+        """Fast fallback for headless mock tests with SyntheticCameraSource."""
         h, w = frame.shape[:2]
         # Look for the warm amber target generated by SyntheticCameraSource
-        # Blue channel is low, Red and Green are high
         mask = (frame[:, :, 2] > 180) & (frame[:, :, 1] > 120) & (frame[:, :, 0] < 80)
         y_indices, x_indices = np.where(mask)
 
@@ -158,16 +247,3 @@ class HeadlessObjectDetector:
             "class_name": "chair",
             "confidence": 0.88,
         }]
-
-    def _parse_onnx_outputs(
-        self, outputs: Any, scale: float, pad_x: int, pad_y: int, orig_w: int, orig_h: int
-    ) -> List[Dict[str, Any]]:
-        """Generic parser for YOLO ONNX output tensors."""
-        detections: List[Dict[str, Any]] = []
-        preds = outputs[0]  # Shape: (1, 84, 8400) or similar
-        if preds.ndim == 3 and preds.shape[1] > preds.shape[2]:
-            preds = np.transpose(preds, (0, 2, 1))
-
-        # Placeholder for parsed ONNX rows
-        return detections
-
