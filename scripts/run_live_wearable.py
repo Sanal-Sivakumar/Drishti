@@ -127,28 +127,65 @@ def build_hardware_stack(
         print("    -> Camera: Initializing Camera Module (with automatic fallback)")
         camera = create_camera_source(backend="auto", device_path="/dev/video0", width=width, height=height, fps=fps)
 
-        i2c_bus = dist_cfg.get("i2c_bus", 1)
-        i2c_addr = dist_cfg.get("i2c_address", 0x29)
-        print(f"    -> Distance: ST VL53L1X Time-of-Flight (I2C Bus {i2c_bus}, Address 0x{i2c_addr:02X})")
-        try:
-            distance_sensor: BaseDistanceSensor = VL53L1XSensor(i2c_bus=i2c_bus, i2c_address=i2c_addr)
-        except Exception as e:
-            print(f"    [!] VL53L1X I2C notice ({e}). Falling back to synthetic depth prior.")
-            distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+        dist_backend = str(dist_cfg.get("backend", "vl53l1x"))
+        if serial_port is not None or dist_backend == "esp32_serial":
+            requested_port = serial_port or str(dist_cfg.get("serial_port", "auto"))
+            print(f"    -> Distance: ESP32 + VL53L0X over USB serial (port={requested_port})")
+            esp_sensor = build_esp32_distance_sensor(dist_cfg, serial_port=serial_port)
+            esp_sensor.start_ranging()
 
-        pin_b1 = trig_cfg.get("pin_button_narration", 17)
-        pin_b2 = trig_cfg.get("pin_button_currency_ocr", 27)
-        print(f"    -> Tactile Input: Push Buttons on GPIO {pin_b1} (Narration) and GPIO {pin_b2} (Currency/OCR)")
-        try:
-            trigger_input: BaseTriggerInput = GPIOPushButtonTrigger(pin_button_1=pin_b1, pin_button_2=pin_b2)
-        except Exception:
-            print("    [!] GPIO library unavailable. Falling back to synthetic trigger input.")
-            trigger_input = SyntheticTriggerInput()
+            deadline = time.time() + 2.5
+            while time.time() < deadline and esp_sensor.link.latest() is None:
+                time.sleep(0.05)
+
+            if esp_sensor.link.latest() is None:
+                status = esp_sensor.get_link_status()
+                print(
+                    f"    [!] No ToF frames from ESP32 ({status.last_error or 'timeout'}). "
+                    "Falling back to synthetic distance."
+                )
+                esp_sensor.stop_ranging()
+                distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+                esp_trigger: Optional[ESP32ButtonTrigger] = None
+            else:
+                time.sleep(0.1)
+                link_status = esp_sensor.get_link_status()
+                print(
+                    f"    [✓] ESP32 link on {link_status.port} | fw {link_status.firmware or '?'} "
+                    f"| {link_status.hz:.1f} Hz | drops {link_status.seq_drops}"
+                )
+                esp_sensor.link.pop_button_events()
+                distance_sensor = esp_sensor
+                esp_trigger = ESP32ButtonTrigger(esp_sensor.link)
+
+            if esp_trigger is not None:
+                print("    -> Tactile Input: ESP32 buttons (GPIO32=Narration, GPIO33=Currency/OCR)")
+                trigger_input = esp_trigger
+            else:
+                trigger_input = SyntheticTriggerInput()
+        else:
+            i2c_bus = dist_cfg.get("i2c_bus", 1)
+            i2c_addr = dist_cfg.get("i2c_address", 0x29)
+            print(f"    -> Distance: ST VL53L1X Time-of-Flight (I2C Bus {i2c_bus}, Address 0x{i2c_addr:02X})")
+            try:
+                distance_sensor = VL53L1XSensor(i2c_bus=i2c_bus, i2c_address=i2c_addr)
+            except Exception as e:
+                print(f"    [!] VL53L1X I2C notice ({e}). Falling back to synthetic depth prior.")
+                distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+
+            pin_b1 = trig_cfg.get("pin_button_narration", 17)
+            pin_b2 = trig_cfg.get("pin_button_currency_ocr", 27)
+            print(f"    -> Tactile Input: Push Buttons on GPIO {pin_b1} (Narration) and GPIO {pin_b2} (Currency/OCR)")
+            try:
+                trigger_input = GPIOPushButtonTrigger(pin_button_1=pin_b1, pin_button_2=pin_b2)
+            except Exception:
+                print("    [!] GPIO library unavailable. Falling back to synthetic trigger input.")
+                trigger_input = SyntheticTriggerInput()
 
         alsa_dev = audio_cfg.get("device_name", "default")
         print(f"    -> Audio Sink: ALSA direct device {alsa_dev} (Bone-Conduction Transducer)")
         try:
-            audio_sink: BaseAudioSink = ALSAAudioSink(device=alsa_dev)
+            audio_sink = ALSAAudioSink(device=alsa_dev)
         except Exception:
             print("    [!] ALSA audio device unavailable. Falling back to default audio sink.")
             audio_sink = ALSAAudioSink(device="default")

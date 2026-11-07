@@ -85,7 +85,7 @@ All configuration is centralized in `pyproject.toml`. All functions must have co
 ```bash
 pytest tests/ -v --cov=. --cov-report=term-missing
 ```
-All 84 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
+All 88 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
 
 ### Gate 3: Quantitative Latency Budget Check
 Every perception and audio commit must be benchmarked against latency limits:

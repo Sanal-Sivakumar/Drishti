@@ -229,11 +229,19 @@ python3 scripts/check_hardware_health.py
 The entire test suite runs completely headless without requiring physical cameras, I2C sensors, audio output hardware, or GUI display servers:
 
 ```bash
-# Run complete test suite (84 unit and integration tests)
+# Run complete test suite (88 unit and integration tests)
 pytest tests/ -v
 ```
 
-### 4. Running the Live Fast Perception Pipeline
+### 4. Zero-Offset ToF Calibration
+When physical hardware is connected, calibrate the VL53L0X sensor against a flat target at a known distance (e.g. 500 mm) to eliminate systematic optical offsets:
+
+```bash
+# Run interactive calibration and save to hardware_dev.yaml
+python3 scripts/calibrate_tof.py --distance-mm 500 --samples 100 --save
+```
+
+### 5. Running the Live Fast Perception Pipeline
 You can run the end-to-end fast perception loop either with synthetic simulation or on physical hardware:
 
 ```bash
@@ -244,7 +252,7 @@ python3 scripts/run_phase1_perception.py --frames 10 --benchmark-frames 50
 python3 scripts/run_phase1_perception.py --camera real --audio real --frames 10
 ```
 
-### 5. Running On-Demand Multilingual OCR & VLM Scene Narration
+### 6. Running On-Demand Multilingual OCR & VLM Scene Narration
 Trigger the on-demand cognitive stream to extract Indic text, narrate the scene, and vocalize speech:
 
 ```bash
@@ -253,7 +261,9 @@ python3 scripts/run_phase2_cognitive.py --camera synthetic
 
 # Real laptop webcam snapshot with audible speech synthesis
 python3 scripts/run_phase2_cognitive.py --camera real --speak
-### 6. Running Master Full-System Orchestrator (Phase 3)
+```
+
+### 7. Running Master Full-System Orchestrator (Phase 3)
 Execute all subsystems concurrently (fast 3D perception, tactile triggers, Gaussian face redaction, and caregiver telemetry):
 
 ```bash
@@ -285,18 +295,14 @@ python3 scripts/run_live_wearable.py --hardware rpi
 - **Button 1 or `N` + Enter**: Triggers local VLM scene narration of what lies ahead.
 - **`Q` + Enter** (or `Ctrl+C`): Gracefully powers down the wearable system.
 
-#### Raspberry Pi Autonomous Boot Deployment (systemd):
-To launch Drishti automatically as an autonomous background appliance whenever the wearable battery pack powers on:
+#### Raspberry Pi Automated Provisioning & Boot Deployment:
+To provision a fresh Raspberry Pi OS 64-bit install with all system packages, udev rules (`/dev/drishti-tof`), models, and background services in one command:
 
 ```bash
-# 1. Copy unit service to systemd directory
-sudo cp config/drishti.service /etc/systemd/system/
+# Automated single-command provisioning
+sudo bash scripts/setup_raspberry_pi.sh
 
-# 2. Reload daemon and enable auto-start on boot
-sudo systemctl daemon-reload
-sudo systemctl enable --now drishti.service
-
-# 3. Check live service status and journal logs
+# Or manage the background service manually
 systemctl status drishti.service
 journalctl -u drishti.service -f
 ```
@@ -310,8 +316,8 @@ journalctl -u drishti.service -f
 | **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- ESP32 DevKit V1 serial link (`hal/esp32_link.py`) and PTY emulator (`tools/fake_esp32.py`)<br>- Bluetooth A2DP audio routing and profile recovery (`hal/audio_route.py`) | ✅ **Completed** | **Checkpoint 0**: All HAL drivers verified via `test_hal.py`, `test_esp32_link.py`, `test_audio_route.py`. |
 | **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer with sub-sample fractional delay (`np.interp`)<br>- Parallax-aware camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier with anisotropy and contour solidity gating<br>- V4L2/OpenCV live webcam streaming and ALSA/PipeWire direct speaker output | ✅ **Completed** | **Checkpoint 1**: Verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
 | **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Offline Piper neural TTS (`en_US-lessac-medium`) with non-blocking async queue and system fallbacks | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
-| **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 84/84 tests passing, verified across full pytest suite. |
-| **Phase 4** | **Field Deployment, Wearable Packaging & Hailo-8L Acceleration**<br>- Hailo-8L M.2 HAT NPU compilation and ONNX pipeline offload<br>- 3D-printed modular chest harness / spectacles frame integration<br>- Bone-conduction headset low-profile acoustic integration | 🔄 **Scheduled** | **Checkpoint 4**: Real-world field navigation and user trial evaluation. |
+| **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Adaptive YOLO ONNX denormalization for live bounding boxes | ✅ **Completed** | **Checkpoint 3**: 88/88 tests passing, verified across full pytest suite. |
+| **Phase 4** | **Physical Hardware Assembly, Zero-Offset Calibration & Edge Deployment**<br>- ESP32 DevKit V1 firmware flashing and breadboard verification (`drishti_tof.ino`)<br>- Optical zero-offset ToF wall calibration (`scripts/calibrate_tof.py`)<br>- Automated Raspberry Pi 5 appliance setup (`scripts/setup_raspberry_pi.sh`)<br>- Systemd background service deployment (`config/drishti.service`) | 🔄 **Active / In Progress** | **Checkpoint 4**: Hardware probe verification on physical sensor link and live field navigation. |
 
 
 ---
