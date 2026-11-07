@@ -145,6 +145,24 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 3.5 YOLO Bounding Box Coordinate Normalization Mismatch
+
+#### Symptom: Live camera stream detects objects but viewer displays no bounding boxes, and all distances clamp to `10.00 m` (appearing like fake or demo values)
+- **Root Cause**:
+  Certain YOLOv8 ONNX exports output normalized bounding box coordinates $[0.0, 1.0]$ rather than raw input pixel coordinates $[0, 640]$. When subtracting letterbox padding (e.g. `pad_y = 80`), unscaled fraction coordinates produce negative bounding box coordinates (e.g. $y_2 \approx -79.1$). Consequently, rectangles have zero or negative area on the debug viewer, and geometric depth prior calculations divide by a clamped $1.0\text{ px}$ height ($Z = (f_y \cdot H) / 1.0 \approx 850\text{ m}$), saturating at the maximum distance clamp ($10.00\text{ m}$).
+- **Diagnostic Command**:
+  ```python
+  import numpy as np
+  import onnxruntime as ort
+  session = ort.InferenceSession("models/yolov8n.onnx")
+  out = session.run(None, {session.get_inputs()[0].name: np.zeros((1, 3, 640, 640), dtype=np.float32)})
+  print("Box max coordinate:", np.max(out[0][0, :4, :]))
+  ```
+- **Fix**:
+  In `perception/detector.py:HeadlessObjectDetector._parse_onnx_outputs`, dynamically detect if the output bounding box tensor has normalized coordinates ($\le 1.05$) and scale coordinates by $(W_{target}, H_{target})$ before unpadding and inverse letterbox scaling. All decoded coordinates are bounded to $[0, W_{orig}]$ and $[0, H_{orig}]$ with positive area gating.
+
+---
+
 ## 4. Multilingual OCR & Indic Script Rendering
 
 ### 4.1 Missing Indic Language Models / Ligature Glitches

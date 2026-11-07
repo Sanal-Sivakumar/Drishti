@@ -271,7 +271,8 @@ def _frame_is_color(frame: Optional[np.ndarray]) -> bool:
     if frame is None or frame.ndim != 3 or frame.shape[2] < 3 or frame.size == 0:
         return False
     means = frame.reshape(-1, 3).mean(axis=0)
-    return float(means.max() - means.min()) >= 6.0
+    std_diff = abs(float(np.std(frame[:, :, 0]) - np.std(frame[:, :, 2])))
+    return float(means.max() - means.min()) >= 4.0 or std_diff >= 3.0
 
 
 def _probe_opencv_cameras(
@@ -291,7 +292,13 @@ def _probe_opencv_cameras(
 
     for index in range(5):
         cam = OpenCVCameraSource(device_index=index, width=width, height=height, fps=fps)
-        success, frame = cam.read_frame()
+        # Read a couple of frames to let sensor auto-exposure and white balance settle
+        success = False
+        frame = None
+        for _ in range(3):
+            s, f = cam.read_frame()
+            if s and f is not None:
+                success, frame = s, f
         if success and frame is not None and frame.size > 0:
             if first_working is None:
                 first_working = index

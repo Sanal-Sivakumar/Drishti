@@ -229,7 +229,7 @@ python3 scripts/check_hardware_health.py
 The entire test suite runs completely headless without requiring physical cameras, I2C sensors, audio output hardware, or GUI display servers:
 
 ```bash
-# Run complete test suite (46 unit and integration tests)
+# Run complete test suite (84 unit and integration tests)
 pytest tests/ -v
 ```
 
@@ -310,7 +310,7 @@ journalctl -u drishti.service -f
 | **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- ESP32 DevKit V1 serial link (`hal/esp32_link.py`) and PTY emulator (`tools/fake_esp32.py`)<br>- Bluetooth A2DP audio routing and profile recovery (`hal/audio_route.py`) | ✅ **Completed** | **Checkpoint 0**: All HAL drivers verified via `test_hal.py`, `test_esp32_link.py`, `test_audio_route.py`. |
 | **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer with sub-sample fractional delay (`np.interp`)<br>- Parallax-aware camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier with anisotropy and contour solidity gating<br>- V4L2/OpenCV live webcam streaming and ALSA/PipeWire direct speaker output | ✅ **Completed** | **Checkpoint 1**: Verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
 | **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Offline Piper neural TTS (`en_US-lessac-medium`) with non-blocking async queue and system fallbacks | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
-| **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 80/80 tests passing, verified across full pytest suite. |
+| **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 84/84 tests passing, verified across full pytest suite. |
 | **Phase 4** | **Field Deployment, Wearable Packaging & Hailo-8L Acceleration**<br>- Hailo-8L M.2 HAT NPU compilation and ONNX pipeline offload<br>- 3D-printed modular chest harness / spectacles frame integration<br>- Bone-conduction headset low-profile acoustic integration | 🔄 **Scheduled** | **Checkpoint 4**: Real-world field navigation and user trial evaluation. |
 
 

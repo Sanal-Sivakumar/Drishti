@@ -284,6 +284,26 @@ By switching from FP32 to INT8:
 - Arithmetic intensity $I$ increases by $4\times$.
 - The application moves out of the memory-bandwidth-choked regime into the compute-efficient regime, achieving $30\text{ FPS}$ on Raspberry Pi 5 CPU and $> 60\text{ FPS}$ on the Hailo-8L NPU.
 
+### 4.6 Letterboxing, Inverse Perspective Mapping & Adaptive Coordinate Denormalization
+Edge object detectors ingest square input tensors (e.g. $640 \times 640 \times 3$), whereas physical camera sensors stream rectangular frames (e.g. $640 \times 480$ or $1920 \times 1080$). To prevent anisotropic optical distortion, Drishti applies aspect-ratio-preserving letterboxing:
+
+$$\text{scale} = \min\left( \frac{W_{target}}{W_{orig}}, \; \frac{H_{target}}{H_{orig}} \right)$$
+$$W_{new} = \text{round}(W_{orig} \cdot \text{scale}), \quad H_{new} = \text{round}(H_{orig} \cdot \text{scale})$$
+$$\text{pad}_x = \left\lfloor \frac{W_{target} - W_{new}}{2} \right\rfloor, \quad \text{pad}_y = \left\lfloor \frac{H_{target} - H_{new}}{2} \right\rfloor$$
+
+When parsing raw ONNX output tensors $\mathbf{\hat{Y}} \in \mathbb{R}^{8400 \times 84}$, predicted bounding boxes may be emitted in raw pixel units $[0, W_{target}]$ or normalized fractions $[0.0, 1.0]$ depending on the quantization exporter:
+
+1. **Adaptive Coordinate Scaling**:
+   $$\text{If } \max(\mathbf{b}_{cx, cy, w, h}) \le 1.05 \implies \begin{cases} c_x \gets c_x \cdot W_{target}, & w \gets w \cdot W_{target} \\ c_y \gets c_y \cdot H_{target}, & h \gets h \cdot H_{target} \end{cases}$$
+
+2. **Inverse Letterbox Mapping to Original Frame Coordinates**:
+   $$x_1 = \text{clamp}\left( \frac{c_x - w/2 - \text{pad}_x}{\text{scale}}, \; 0, \; W_{orig} \right)$$
+   $$y_1 = \text{clamp}\left( \frac{c_y - h/2 - \text{pad}_y}{\text{scale}}, \; 0, \; H_{orig} \right)$$
+   $$x_2 = \text{clamp}\left( \frac{c_x + w/2 - \text{pad}_x}{\text{scale}}, \; 0, \; W_{orig} \right)$$
+   $$y_2 = \text{clamp}\left( \frac{c_y + h/2 - \text{pad}_y}{\text{scale}}, \; 0, \; H_{orig} \right)$$
+
+This ensures bounding boxes accurately overlap visual objects in camera coordinates without negative padding offsets or false perspective depth clamping.
+
 ---
 
 # 5. Indian Currency Note (INR) Recognition

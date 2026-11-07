@@ -55,6 +55,7 @@ class HeadlessObjectDetector:
         ]
         self.target_classes = [CLASS_ALIASES.get(name, name) for name in requested_classes]
         self.allow_synthetic_fallback = allow_synthetic_fallback
+        self.input_size = (640, 640)
         self.ort_session = None
 
         # Resolve model path
@@ -179,8 +180,8 @@ class HeadlessObjectDetector:
         h, w = frame.shape[:2]
 
         if self.ort_session is not None:
-            # 1. Letterbox resize to 640x640
-            letterboxed, scale, (pad_x, pad_y) = self.letterbox_image(frame, target_size=(640, 640))
+            # 1. Letterbox resize to target size
+            letterboxed, scale, (pad_x, pad_y) = self.letterbox_image(frame, target_size=self.input_size)
             # 2. Normalize to float32 [0.0, 1.0] and convert to NCHW
             blob = letterboxed.astype(np.float32) / 255.0
             blob = np.transpose(blob, (2, 0, 1))
@@ -191,7 +192,9 @@ class HeadlessObjectDetector:
             outputs = self.ort_session.run(None, {input_name: blob})
 
             # 4. Parse raw output tensor and apply NMS
-            raw_dets = self._parse_onnx_outputs(outputs, scale, pad_x, pad_y, w, h)
+            raw_dets = self._parse_onnx_outputs(
+                outputs, scale, pad_x, pad_y, w, h, target_size=self.input_size
+            )
             nms_dets = self.non_maximum_suppression(raw_dets)
             if nms_dets:
                 return nms_dets
@@ -206,9 +209,20 @@ class HeadlessObjectDetector:
             return []
 
     def _parse_onnx_outputs(
-        self, outputs: Any, scale: float, pad_x: int, pad_y: int, orig_w: int, orig_h: int
+        self,
+        outputs: Any,
+        scale: float,
+        pad_x: int,
+        pad_y: int,
+        orig_w: int,
+        orig_h: int,
+        target_size: Tuple[int, int] = (640, 640),
     ) -> List[Dict[str, Any]]:
-        """Decode YOLOv8 [1, 84, 8400] output tensor into bounding boxes and classes."""
+        """Decode YOLOv8 [1, 84, 8400] output tensor into bounding boxes and classes.
+
+        Correctly handles both raw pixel-coordinate models ([0, 640]) and
+        normalized models ([0.0, 1.0]).
+        """
         detections: List[Dict[str, Any]] = []
         preds = outputs[0]  # Shape: (1, 84, 8400)
         if preds.ndim == 3:
@@ -216,7 +230,10 @@ class HeadlessObjectDetector:
         if preds.shape[0] < preds.shape[1]:
             preds = preds.T  # Transpose to (8400, 84)
 
-        boxes = preds[:, :4]
+        if preds.shape[0] == 0:
+            return []
+
+        boxes = preds[:, :4].copy()
         scores = preds[:, 4:]
         class_ids = np.argmax(scores, axis=1)
         confidences = np.max(scores, axis=1)
@@ -226,15 +243,35 @@ class HeadlessObjectDetector:
         filtered_cids = class_ids[mask]
         filtered_confs = confidences[mask]
 
+        if len(filtered_boxes) == 0:
+            return []
+
+        # Handle models that output normalized coordinates [0.0, 1.0] vs pixel coordinates [0, 640]
+        target_w, target_h = target_size
+        if np.max(preds[:, :4]) <= 1.05:
+            filtered_boxes[:, 0] *= target_w
+            filtered_boxes[:, 1] *= target_h
+            filtered_boxes[:, 2] *= target_w
+            filtered_boxes[:, 3] *= target_h
+
         for (cx, cy, bw, bh), cid, conf in zip(filtered_boxes, filtered_cids, filtered_confs):
             cls_name = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"class_{cid}"
             if self.target_classes and cls_name not in self.target_classes:
                 continue
 
-            x1 = max(0.0, float((cx - bw / 2.0 - pad_x) / scale))
-            y1 = max(0.0, float((cy - bh / 2.0 - pad_y) / scale))
-            x2 = min(float(orig_w), float((cx + bw / 2.0 - pad_x) / scale))
-            y2 = min(float(orig_h), float((cy + bh / 2.0 - pad_y) / scale))
+            x1 = max(0.0, min(float(orig_w), float((cx - bw / 2.0 - pad_x) / scale)))
+            y1 = max(0.0, min(float(orig_h), float((cy - bh / 2.0 - pad_y) / scale)))
+            x2 = max(0.0, min(float(orig_w), float((cx + bw / 2.0 - pad_x) / scale)))
+            y2 = max(0.0, min(float(orig_h), float((cy + bh / 2.0 - pad_y) / scale)))
+
+            if x2 < x1:
+                x1, x2 = x2, x1
+            if y2 < y1:
+                y1, y2 = y2, y1
+
+            # Ignore degenerate zero-area boxes
+            if (x2 - x1) < 1.0 or (y2 - y1) < 1.0:
+                continue
 
             detections.append({
                 "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
