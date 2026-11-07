@@ -197,9 +197,17 @@ void loop() {
 
   if (sensorReady) {
     uint16_t rawMm = sensor.readRangeContinuousMillimeters();
-    uint8_t rangeStatus = sensor.readRangeStatus();
+    uint8_t rangeStatus = 0;
     if (sensor.timeoutOccurred()) {
       rangeStatus = 254;
+    } else {
+      // Register 0x14: RESULT_RANGE_STATUS bits [7:3] contain ST's RangeStatus
+      rangeStatus = (sensor.readReg(0x14) >> 3) & 0x0F;
+      if (rawMm >= 8000 || rawMm < MIN_VALID_MM || rawMm > MAX_VALID_MM) {
+        if (rangeStatus == 0) {
+          rangeStatus = 1;  // Signal / Range boundary error
+        }
+      }
     }
 
     uint16_t filteredMm = medianFilter(rangeStatus == 0 ? rawMm : 0);
