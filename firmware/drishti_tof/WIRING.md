@@ -50,6 +50,8 @@ Leave **GPIO1** on the VL53L0X unconnected.
 
 ## 3. Diagram
 
+![Drishti ESP32 + VL53L0X Breadboard Wiring](wiring_diagram.jpg)
+
 ```
                  ESP32 DevKit V1                     VL53L0X breakout
                ┌────────────────┐                   ┌────────────────┐
