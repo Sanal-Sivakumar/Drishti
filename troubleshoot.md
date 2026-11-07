@@ -324,4 +324,24 @@ python3 scripts/run_live_wearable.py --hardware laptop
 ```
 All subsystems emit ISO-timestamped log records under the `drishti.*` namespace.
 
+### 8.5 ESP32 USB-Serial Sensor Link & PTY Troubleshooting
+- **Symptom**: `ESP32 serial: no frames (timeout; check USB cable/port)`
+- **Remediation**:
+  1. Check device permissions: ensure your user belongs to the `dialout` group (`sudo usermod -a -G dialout $USER`).
+  2. Verify cable capability: many thin USB cables are charge-only. Use a data-sync USB cable.
+  3. Probe with the dedicated diagnostic CLI:
+     ```bash
+     python3 scripts/probe_esp32.py --port auto --duration 5
+     ```
+  4. Testing without physical ESP32: Launch the virtual PTY emulator in a background terminal:
+     ```bash
+     python3 tools/fake_esp32.py --link /tmp/drishti-tof
+     python3 scripts/run_live_wearable.py --hardware laptop --serial-port /tmp/drishti-tof
+     ```
+
+### 8.6 Headless Debug Browser Viewer
+- **Usage**: Add `--viewer` to any runner invocation (`python3 scripts/run_live_wearable.py --hardware laptop --viewer`).
+- **Endpoint**: Open `http://127.0.0.1:8080/` in Chrome/Firefox to view the live 30 FPS MJPEG stream with YOLO bounding boxes, class labels, metric 3D distances, and the ToF laser spot crosshair.
+- **Port Conflict**: Change the port via `--viewer-port 8081` if port 8080 is bound by another service.
+
 

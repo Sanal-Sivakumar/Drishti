@@ -4,7 +4,8 @@
 Production entrypoint for continuous wearable execution on Raspberry Pi 5 / Laptop.
 Runs all capabilities concurrently:
 1. Continuous sub-100ms 3D spatial obstacle avoidance via binaural audio.
-2. Continuous Indian currency note recognition (auto-announces banknotes in view).
+2. On-demand Indian currency recognition / Indic OCR via tactile Button 2 or C
+   (continuous currency scanning is opt-in, and off by default on laptop).
 3. On-demand multilingual Indic OCR & local VLM scene narration via tactile triggers / keys.
 4. Local 2D Gaussian face redaction privacy filter.
 5. Caregiver MQTT telemetry with QoS 1 and Last Will and Testament.
@@ -26,9 +27,21 @@ import threading
 from typing import Optional, Dict, Any
 
 from hal.camera import BaseCameraSource, V4L2CameraSource, SyntheticCameraSource, OpenCVCameraSource, create_camera_source
-from hal.distance_sensor import BaseDistanceSensor, VL53L1XSensor, SyntheticDistanceSensor
-from hal.trigger_input import BaseTriggerInput, GPIOPushButtonTrigger, SyntheticTriggerInput
+from hal.distance_sensor import (
+    BaseDistanceSensor,
+    VL53L1XSensor,
+    SyntheticDistanceSensor,
+    ESP32DistanceSensor,
+)
+from hal.trigger_input import (
+    BaseTriggerInput,
+    GPIOPushButtonTrigger,
+    SyntheticTriggerInput,
+    ESP32ButtonTrigger,
+    CompositeTriggerInput,
+)
 from hal.audio_output import BaseAudioSink, ALSAAudioSink, HeadlessAudioRecorder
+from perception.debug_viewer import DebugViewer
 from safety.telemetry import TelemetryClient
 from pipeline import DrishtiMasterPipeline
 from config.config_loader import get_pipeline_config, get_hardware_config
@@ -72,7 +85,27 @@ def is_raspberry_pi() -> bool:
         return False
 
 
-def build_hardware_stack(hardware_mode: str, hw_cfg: Optional[Dict[str, Any]] = None):
+def build_esp32_distance_sensor(
+    dist_cfg: Dict[str, Any], serial_port: Optional[str] = None
+) -> ESP32DistanceSensor:
+    """Build the ESP32/VL53L0X sensor from the hardware profile."""
+    return ESP32DistanceSensor(
+        port=serial_port or str(dist_cfg.get("serial_port", "auto")),
+        baud=int(dist_cfg.get("baud", 921600)),
+        stale_ms=float(dist_cfg.get("stale_ms", 120)),
+        min_valid_mm=int(dist_cfg.get("min_valid_mm", 30)),
+        max_valid_mm=int(dist_cfg.get("max_valid_mm", 2000)),
+        offset_mm=int(dist_cfg.get("offset_mm", 0)),
+    )
+
+
+def build_hardware_stack(
+    hardware_mode: str,
+    hw_cfg: Optional[Dict[str, Any]] = None,
+    serial_port: Optional[str] = None,
+    camera_index: Optional[int] = None,
+    no_esp32: bool = False,
+):
     """Instantiate appropriate HAL drivers based on host environment and config files."""
     if hardware_mode == "auto":
         hardware_mode = "rpi" if is_raspberry_pi() else "laptop"
@@ -122,17 +155,76 @@ def build_hardware_stack(hardware_mode: str, hw_cfg: Optional[Dict[str, Any]] = 
 
     elif hardware_mode == "laptop":
         # Workstation / Laptop developer stack
-        print("    -> Camera: Workstation webcam on /dev/video0 (with automatic fallback)")
-        camera = create_camera_source(backend="auto", device_path="/dev/video0", width=width, height=height, fps=fps)
+        requested_index = camera_index
+        if requested_index is None:
+            cfg_index = int(cam_cfg.get("device_index", -1))
+            requested_index = cfg_index if cfg_index >= 0 else None
 
-        print("    -> Distance: Synthetic raycast distance simulator")
-        distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+        print("    -> Camera: Workstation webcam (auto-probing for a colour camera)")
+        camera = create_camera_source(
+            backend=str(cam_cfg.get("backend", "auto")),
+            device_path="/dev/video0",
+            width=width,
+            height=height,
+            fps=fps,
+            device_index=requested_index,
+        )
 
-        print("    -> Tactile Input: Interactive Terminal Keyboard (N: Narration, C: Currency/OCR, Q: Quit)")
+        dist_backend = str(dist_cfg.get("backend", "synthetic"))
+        if no_esp32:
+            dist_backend = "synthetic"
+
+        if dist_backend == "esp32_serial":
+            requested_port = serial_port or str(dist_cfg.get("serial_port", "auto"))
+            print(f"    -> Distance: ESP32 + VL53L0X over USB serial (port={requested_port})")
+            esp_sensor = build_esp32_distance_sensor(dist_cfg, serial_port=serial_port)
+            esp_sensor.start_ranging()
+
+            # Give the reader thread time to enumerate the port and receive frames.
+            deadline = time.time() + 2.5
+            while time.time() < deadline and esp_sensor.link.latest() is None:
+                time.sleep(0.05)
+
+            if esp_sensor.link.latest() is None:
+                status = esp_sensor.get_link_status()
+                print(
+                    f"    [!] No ToF frames from ESP32 ({status.last_error or 'timeout'}). "
+                    "Falling back to synthetic distance."
+                )
+                esp_sensor.stop_ranging()
+                distance_sensor: BaseDistanceSensor = SyntheticDistanceSensor(base_distance_m=1.75)
+                esp_trigger: Optional[ESP32ButtonTrigger] = None
+            else:
+                # Let the boot banner arrive on the first heartbeat before printing.
+                time.sleep(0.1)
+                link_status = esp_sensor.get_link_status()
+                print(
+                    f"    [✓] ESP32 link on {link_status.port} | fw {link_status.firmware or '?'} "
+                    f"| {link_status.hz:.1f} Hz | drops {link_status.seq_drops}"
+                )
+                # Discard presses that landed during the startup probe so the
+                # first pipeline cycle does not fire a stale narration.
+                esp_sensor.link.pop_button_events()
+                distance_sensor = esp_sensor
+                esp_trigger = ESP32ButtonTrigger(esp_sensor.link)
+        else:
+            print("    -> Distance: Synthetic raycast distance simulator")
+            distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+            esp_trigger = None
+
+        if esp_trigger is not None:
+            print("    -> Tactile Input: ESP32 buttons (GPIO32=Narration, GPIO33=Currency/OCR) + N/C keys")
+        else:
+            print("    -> Tactile Input: Interactive Terminal Keyboard (N: Narration, C: Currency/OCR, Q: Quit)")
+
         synthetic_trigger = SyntheticTriggerInput()
-        trigger_input = synthetic_trigger
         kb_thread = KeyboardTriggerThread(synthetic_trigger)
         kb_thread.start()
+
+        if esp_trigger is not None:
+            trigger_input: BaseTriggerInput = CompositeTriggerInput([esp_trigger, synthetic_trigger])
+        else:
+            trigger_input = synthetic_trigger
 
         alsa_dev = audio_cfg.get("device_name", "default")
         print(f"    -> Audio Sink: Audio output on {alsa_dev}")
@@ -153,6 +245,39 @@ def build_hardware_stack(hardware_mode: str, hw_cfg: Optional[Dict[str, Any]] = 
     return camera, distance_sensor, trigger_input, audio_sink
 
 
+def build_viewer_status_lines(
+    cycle_count: int,
+    fast_result: Dict[str, Any],
+    distance_sensor: BaseDistanceSensor,
+) -> list:
+    """Compose the HUD text for the debug viewer."""
+    latency = fast_result.get("latency_ms", {}).get("total_cycle", 0.0)
+    fps = 1000.0 / max(float(latency), 1.0)
+    lines = [f"cycle {cycle_count} | {fps:.1f} FPS | {float(latency):.1f} ms"]
+
+    if isinstance(distance_sensor, (ESP32DistanceSensor, VL53L1XSensor)):
+        distance = distance_sensor.get_distance_meters()
+        lines.append(f"ToF: {distance:.2f} m" if distance is not None else "ToF: -- (stale/invalid)")
+
+    if isinstance(distance_sensor, ESP32DistanceSensor):
+        link = distance_sensor.get_link_status()
+        age = "inf" if link.age_ms == float("inf") else f"{link.age_ms:.0f}"
+        lines.append(
+            f"ESP32: {link.port or '-'} | {link.hz:.0f} Hz | age {age} ms | "
+            f"drops {link.seq_drops} | invalid {link.invalid_pct:.1f}%"
+        )
+
+    hazard = fast_result.get("primary_hazard")
+    if hazard:
+        lines.append(
+            f"PRIMARY: {hazard['class_name']} {hazard['distance_m']:.2f} m "
+            f"az {hazard['azimuth_deg']:+.0f} deg | source {hazard['fusion_source']}"
+        )
+    else:
+        lines.append("PRIMARY: path clear")
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Drishti Live Continuous Wearable Runner")
     parser.add_argument(
@@ -165,14 +290,14 @@ def main() -> None:
         "--continuous-currency",
         dest="continuous_currency",
         action="store_true",
-        default=True,
-        help="Enable continuous automatic banknote recognition in background (default: True)",
+        default=None,
+        help="Enable continuous automatic banknote recognition in background (default: off on laptop)",
     )
     parser.add_argument(
         "--no-continuous-currency",
         dest="continuous_currency",
         action="store_false",
-        help="Disable continuous automatic banknote recognition",
+        help="Disable continuous automatic banknote recognition (default on laptop)",
     )
     parser.add_argument(
         "--currency-cooldown",
@@ -197,7 +322,45 @@ def main() -> None:
         default=None,
         help="Optional maximum number of perception cycles to execute before exiting (default: infinite)",
     )
+    parser.add_argument(
+        "--serial-port",
+        default=None,
+        help="ESP32 serial port (default: auto-detect /dev/ttyUSB*, /dev/ttyACM*)",
+    )
+    parser.add_argument(
+        "--camera-index",
+        type=int,
+        default=None,
+        help="Explicit OpenCV camera index (default: auto-probe for a colour camera)",
+    )
+    parser.add_argument(
+        "--no-esp32",
+        action="store_true",
+        help="Force synthetic distance even if an ESP32 is configured",
+    )
+    parser.add_argument(
+        "--viewer",
+        action="store_true",
+        help="Serve an annotated MJPEG debug view at http://127.0.0.1:8080/",
+    )
+    parser.add_argument(
+        "--viewer-port",
+        type=int,
+        default=8080,
+        help="Port for the debug viewer (default: 8080)",
+    )
+    parser.add_argument(
+        "--viewer-host",
+        default="127.0.0.1",
+        help="Bind address for the debug viewer (default: localhost; use 0.0.0.0 for phone access)",
+    )
     args = parser.parse_args()
+
+    if args.continuous_currency is None:
+        target = args.hardware
+        if target == "auto":
+            target = "rpi" if is_raspberry_pi() else "laptop"
+        args.continuous_currency = target != "laptop"
 
     print("=" * 80)
     print("        DRISHTI ASSISTIVE WEARABLE: AUTONOMOUS LIVE SYSTEM")
@@ -208,7 +371,13 @@ def main() -> None:
     hw_cfg = get_hardware_config(profile=args.hardware)
 
     # 2. Initialize HAL stack from config
-    camera, distance_sensor, trigger_input, audio_sink = build_hardware_stack(args.hardware, hw_cfg=hw_cfg)
+    camera, distance_sensor, trigger_input, audio_sink = build_hardware_stack(
+        args.hardware,
+        hw_cfg=hw_cfg,
+        serial_port=args.serial_port,
+        camera_index=args.camera_index,
+        no_esp32=args.no_esp32,
+    )
     
     # 3. Configure and Connect MQTT Telemetry
     telem_cfg = pipeline_cfg.get("safety", {}).get("telemetry", {})
@@ -239,6 +408,25 @@ def main() -> None:
 
     # 5. Setup Graceful Shutdown Handler
     running = True
+
+    # 5a. Report the speech backend and Bluetooth route before the loop starts.
+    speech = pipeline.speech_service
+    backends = speech.available_backends() or ["none"]
+    print(f"[*] Speech backend: {', '.join(backends)}")
+    if speech.has_piper:
+        print(f"    -> Piper voice: {speech.piper_model}")
+    else:
+        print("    [!] Piper not found; falling back to system speech (more robotic).")
+    audio_route = speech.get_audio_route()
+    print(f"[*] Audio route: {audio_route.summary()}")
+    for warning in audio_route.warnings:
+        print(f"    [!] {warning}")
+
+    viewer: Optional[DebugViewer] = None
+    if args.viewer:
+        viewer = DebugViewer(host=args.viewer_host, port=args.viewer_port)
+        viewer.start()
+        print(f"[*] Debug viewer: {viewer.url}  (Ctrl+C to stop)")
 
     def sigint_handler(signum, frame):
         nonlocal running
@@ -271,6 +459,13 @@ def main() -> None:
             res = pipeline.step()
             fast = res.get("fast_perception", {})
 
+            if viewer is not None:
+                viewer.update(
+                    getattr(pipeline.fast_pipeline, "last_frame", None),
+                    fast,
+                    build_viewer_status_lines(cycle_count, fast, distance_sensor),
+                )
+
             # Format real-time hazard status
             if fast.get("success"):
                 hazard = fast.get("primary_hazard")
@@ -302,7 +497,8 @@ def main() -> None:
                 c = res["currency"]
                 print(f"  >>> [TACTILE CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c['confidence']:.2f})")
             elif "ocr" in res:
-                print(f"  >>> [TACTILE OCR] Spoken: \"{res['ocr']['text']}\"")
+                ocr_text = res["ocr"].get("text") or "No clear text detected."
+                print(f"  >>> [TACTILE OCR] Spoken: \"{ocr_text}\"")
 
             # 30 FPS pacing yield
             time.sleep(0.02)
@@ -311,6 +507,8 @@ def main() -> None:
         pass
     finally:
         print("\n[*] Releasing camera, sensors, and telemetry sockets...")
+        if viewer is not None:
+            viewer.stop()
         if not args.no_speech:
             pipeline.speech_service.speak("Drishti powering down.", play_audio=True)
         pipeline.shutdown()

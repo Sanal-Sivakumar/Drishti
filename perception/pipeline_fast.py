@@ -31,7 +31,13 @@ class FastPerceptionPipeline:
         self.camera = camera
         self.distance_sensor = distance_sensor
         self.audio_sink = audio_sink
-        self.detector = detector or HeadlessObjectDetector()
+        if detector is None:
+            # The amber heuristic is only valid for SyntheticCameraSource; on a
+            # real frame it can mistake wood, skin or clothing for an obstacle.
+            detector = HeadlessObjectDetector(
+                allow_synthetic_fallback=bool(getattr(camera, "is_synthetic", False))
+            )
+        self.detector = detector
         self.depth_fuser = depth_fuser or SpatialDepthFuser()
         self.audio_synthesizer = audio_synthesizer or SpatialAudioSynthesizer()
 

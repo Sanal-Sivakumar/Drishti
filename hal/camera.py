@@ -124,9 +124,23 @@ class OpenCVCameraSource(BaseCameraSource):
             self.cv2 = cv2
             self.cap = cv2.VideoCapture(device_index)
             if self.cap.isOpened():
+                # MJPG keeps many laptop webcams at 30 FPS instead of silently
+                # dropping to 10 FPS with the default YUYV format.
+                try:
+                    self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                except Exception:
+                    pass
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 self.cap.set(cv2.CAP_PROP_FPS, fps)
+                try:
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+                logger.info(
+                    "OpenCV camera %d opened: %dx%d @ %.0f FPS requested.",
+                    device_index, width, height, fps,
+                )
             else:
                 logger.debug("OpenCV VideoCapture device index %d could not be opened.", device_index)
         except ImportError:
@@ -252,26 +266,83 @@ class V4L2CameraSource(BaseCameraSource):
         }
 
 
+def _frame_is_color(frame: Optional[np.ndarray]) -> bool:
+    """Heuristic: an IR / Windows Hello camera yields near-equal BGR channels."""
+    if frame is None or frame.ndim != 3 or frame.shape[2] < 3 or frame.size == 0:
+        return False
+    means = frame.reshape(-1, 3).mean(axis=0)
+    return float(means.max() - means.min()) >= 6.0
+
+
+def _probe_opencv_cameras(
+    width: int, height: int, fps: int, device_index: Optional[int]
+) -> Optional[OpenCVCameraSource]:
+    """Open the requested index, or probe indices 0..4 preferring a colour camera."""
+    if device_index is not None and device_index >= 0:
+        cam = OpenCVCameraSource(device_index=device_index, width=width, height=height, fps=fps)
+        success, frame = cam.read_frame()
+        if success and frame is not None and frame.size > 0:
+            return cam
+        cam.release()
+        return None
+
+    first_working: Optional[int] = None
+    colour_index: Optional[int] = None
+
+    for index in range(5):
+        cam = OpenCVCameraSource(device_index=index, width=width, height=height, fps=fps)
+        success, frame = cam.read_frame()
+        if success and frame is not None and frame.size > 0:
+            if first_working is None:
+                first_working = index
+            if _frame_is_color(frame):
+                colour_index = index
+                cam.release()
+                break
+        cam.release()
+
+    chosen = colour_index if colour_index is not None else first_working
+    if chosen is None:
+        return None
+
+    cam = OpenCVCameraSource(device_index=chosen, width=width, height=height, fps=fps)
+    success, _ = cam.read_frame()
+    if success:
+        if colour_index is None:
+            logger.warning(
+                "Only a monochrome/IR-capable camera was found (index %d); "
+                "object detection quality may be degraded.", chosen,
+            )
+        logger.info("Camera probe selected index %d.", chosen)
+        return cam
+    cam.release()
+    return None
+
+
 def create_camera_source(
     backend: str = "auto",
     device_path: str = "/dev/video0",
     width: int = 640,
     height: int = 480,
     fps: int = 30,
+    device_index: Optional[int] = None,
 ) -> BaseCameraSource:
-    """Instantiate camera driver with automatic graceful fallback to synthetic generator."""
+    """Instantiate camera driver with automatic graceful fallback to synthetic generator.
+
+    Args:
+        device_index: Explicit OpenCV index. ``None`` probes 0..4 and prefers a
+            colour camera, skipping IR / Windows Hello devices.
+    """
     if backend == "synthetic":
         return SyntheticCameraSource(width=width, height=height, fps=fps)
 
     # 1. Try OpenCV if explicitly requested or auto
     if backend in ("opencv", "auto"):
         try:
-            cam = OpenCVCameraSource(device_index=0, width=width, height=height, fps=fps)
-            success, frame = cam.read_frame()
-            if success and frame is not None and frame.size > 0:
-                logger.info("Successfully acquired hardware camera via OpenCV backend (device 0).")
+            cam = _probe_opencv_cameras(width, height, fps, device_index)
+            if cam is not None:
+                logger.info("Successfully acquired hardware camera via OpenCV backend.")
                 return cam
-            cam.release()
         except Exception as e:
             logger.debug("OpenCV camera acquisition probe failed: %s", e)
 

@@ -147,5 +147,40 @@ def test_identify_currency_five_hundred_rupees():
     assert "Five hundred" in res["spoken_name"]
 
 
+def test_frame_filling_note_color_is_rejected():
+    """No center-crop fallback: a coloured wall/shirt must not become a note."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.55)
+    frame = np.full((480, 640, 3), [230, 170, 60], dtype=np.uint8)
+    frame[::2, ::2, :] = np.clip(frame[::2, ::2, :].astype(int) + 20, 0, 255).astype(np.uint8)
+
+    res = rec.identify_currency(frame, color_order="BGR")
+    assert res["denomination"] is None
+    assert "bbox" not in res
+
+
+def test_smooth_skin_rectangle_is_rejected():
+    """A sharp-edged but smooth skin/hand region must fail the texture gate."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.55)
+    frame = np.full((480, 640, 3), [120, 140, 160], dtype=np.uint8)
+    frame[160:310, 180:480, :] = [135, 155, 195]  # skin-like, 2:1 rectangle
+
+    res = rec.identify_currency(frame, color_order="BGR")
+    assert res["denomination"] is None
+
+
+def test_directional_wood_grain_is_rejected():
+    """Wood/table grain is strongly directional and must not pass as intaglio."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.55)
+    frame = np.full((480, 640, 3), [100, 120, 140], dtype=np.uint8)
+    region = frame[160:310, 180:480, :]
+    for x in range(region.shape[1]):
+        region[:, x, :] = np.clip(
+            region[:, x, :].astype(int) + (x % 4) * 12 + 18, 0, 255
+        ).astype(np.uint8)
+
+    res = rec.identify_currency(frame, color_order="BGR")
+    assert res["denomination"] is None
+
+
 
 

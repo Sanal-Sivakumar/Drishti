@@ -11,7 +11,9 @@ pyyaml>=6.0.0
 # Cognitive & Hardware Abstraction Subsystems
 pytesseract>=0.3.10
 sounddevice>=0.4.6
+pyserial>=3.5
 paho-mqtt>=2.0.0
+piper-tts>=1.8.0
 
 # Quality Assurance & Testing
 pytest>=8.0.0

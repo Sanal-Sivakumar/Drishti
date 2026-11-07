@@ -74,11 +74,15 @@ cognitive:
       4. Limit response to 2 crisp, actionable sentences.
 
   tts:
-    engine: "spd_say"
+    engine: "piper"
     default_language: "en_US"
     speaking_rate: 0.95
     voice_type: "female1"
     pitch: 0
+    piper_model: "models/piper/en_US-lessac-medium.onnx"
+    piper_length_scale: 1.12
+    piper_sentence_silence: 0.25
+    async_playback: true
 
 safety:
   privacy:

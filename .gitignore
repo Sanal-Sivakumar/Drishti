@@ -37,16 +37,24 @@ env/
 
 # Large AI model weight checkpoints & datasets (store weights locally or pull via scripts)
 models/*.onnx
+models/**/*.onnx
 models/*.tflite
+models/**/*.tflite
 models/*.gguf
+models/**/*.gguf
 models/*.hef
 models/*.bin
+models/**/*.bin
 models/*.pt
 models/*.safetensors
 data/raw/
 data/recordings/*.wav
 data/snapshots/*.jpg
 data/snapshots/*.png
+
+# PlatformIO build artifacts
+.pio/
+**/.pio/
 
 # Keep empty model/data directories with .gitkeep
 !models/.gitkeep

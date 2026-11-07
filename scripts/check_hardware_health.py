@@ -12,8 +12,10 @@ Prints a diagnostic summary with actionable remediation steps from troubleshoot.
 
 import os
 import sys
+import time
 import shutil
 import hashlib
+import argparse
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
@@ -63,10 +65,42 @@ def check_camera() -> Dict[str, Any]:
     return status
 
 
-def check_distance_sensor() -> Dict[str, Any]:
-    """Audit Time-of-Flight (ToF) distance sensor."""
-    status = {"name": "VL53L1X ToF Sensor", "status": "FAIL", "details": []}
+def check_distance_sensor(serial_port: str = "auto") -> Dict[str, Any]:
+    """Audit the depth source: ESP32/VL53L0X over serial, then I2C VL53L1X."""
+    status = {"name": "Distance Sensor (ESP32/VL53L0X)", "status": "FAIL", "details": []}
 
+    # Preferred laptop/Pi path: ESP32 sensor MCU over USB serial.
+    try:
+        from hal.esp32_link import Esp32Link
+
+        link = Esp32Link(port=serial_port, baud=921600)
+        link.start()
+        deadline = time.time() + 2.5
+        while time.time() < deadline and link.latest() is None:
+            time.sleep(0.05)
+        snapshot = link.status()
+        sample = link.latest()
+        link.stop()
+
+        if sample is not None:
+            status["status"] = "OK"
+            status["details"].append(
+                f"ESP32 serial link: {snapshot.port} | fw {snapshot.firmware or '?'} "
+                f"| {snapshot.hz:.1f} Hz | drops {snapshot.seq_drops}"
+            )
+            status["details"].append(
+                f"Range: {sample.mm_filtered} mm (raw {sample.mm_raw} mm, status {sample.status}, "
+                f"invalid {snapshot.invalid_pct:.1f} %)"
+            )
+            return status
+
+        status["details"].append(
+            f"ESP32 serial: no frames ({snapshot.last_error or 'timeout; check USB cable/port'})"
+        )
+    except Exception as e:
+        status["details"].append(f"ESP32 serial probe notice: {e}")
+
+    # Legacy fallback: VL53L1X wired directly to the Pi's I2C bus.
     i2c_dev = "/dev/i2c-1"
     has_i2c = os.path.exists(i2c_dev)
     status["details"].append(f"I2C bus device {i2c_dev}: {'PRESENT' if has_i2c else 'ABSENT'}")
@@ -88,7 +122,7 @@ def check_distance_sensor() -> Dict[str, Any]:
             dist_mm = tof.get_distance()
             tof.stop_ranging()
             status["status"] = "OK"
-            status["details"].append(f"Sensor ping: {dist_mm} mm")
+            status["details"].append(f"VL53L1X I2C ping: {dist_mm} mm")
         except Exception as e:
             status["status"] = "WARNING"
             status["details"].append(f"I2C connect notice: {e}. Check wiring on GPIO Pin 3/5.")
@@ -156,13 +190,21 @@ def check_neural_models() -> Dict[str, Any]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Drishti hardware diagnostics")
+    parser.add_argument(
+        "--serial-port",
+        default="auto",
+        help="ESP32 serial port (default: auto-detect)",
+    )
+    args = parser.parse_args()
+
     print("=" * 76)
     print("           DRISHTI ASSISTIVE WEARABLE: HARDWARE DIAGNOSTICS")
     print("=" * 76)
 
     checks = [
         check_camera(),
-        check_distance_sensor(),
+        check_distance_sensor(serial_port=args.serial_port),
         check_audio_output(),
         check_neural_models(),
     ]

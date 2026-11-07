@@ -268,18 +268,22 @@ python3 scripts/run_phase3_full_system.py --camera real --audio real
 Runs continuously with active 3D spatial obstacle sonification, automatic banknote detection, and live interactive controls:
 
 ```bash
-# On Laptop (uses webcam /dev/video0, speakers plughw:1,0, and interactive terminal controls)
-python3 scripts/run_live_wearable.py --hardware laptop
+# On Laptop (webcam, ESP32 DevKit V1 + VL53L0X over serial, optional browser debug viewer)
+python3 scripts/run_live_wearable.py --hardware laptop --viewer
 
-# On Raspberry Pi 5 (Camera Module 3, VL53L1X ToF, GPIO 17/27 buttons, and bone conduction)
+# On Laptop with virtual ESP32 PTY emulator (no physical MCU needed)
+python3 tools/fake_esp32.py --link /tmp/drishti-tof &
+python3 scripts/run_live_wearable.py --hardware laptop --serial-port /tmp/drishti-tof --viewer
+
+# On Raspberry Pi (Camera Module 3 / USB webcam, ESP32 or VL53L1X, GPIO buttons)
 python3 scripts/run_live_wearable.py --hardware rpi
 ```
 
-#### Interactive Controls in Live Terminal Mode:
-- **Automatic Note Detection**: Hold any Indian Rupee banknote (₹10, ₹20, ₹50, ₹100, ₹200, ₹500) up to the camera—it announces the denomination with debouncing.
-- **Type `N` + Enter**: Triggers local VLM scene narration of what lies ahead.
-- **Type `C` + Enter**: Triggers manual banknote / Multilingual Indic OCR reading.
-- **Type `Q` + Enter** (or `Ctrl+C`): Gracefully powers down the wearable system.
+#### Interactive Controls & Debug Viewer:
+- **Debug Browser Viewer**: Open `http://127.0.0.1:8080/` in your browser to inspect real-time video frames with YOLO bounding boxes, class labels, metric 3D distances, and the ToF laser spot crosshair.
+- **Button 2 or `C` + Enter**: Triggers opt-in Indian Rupee banknote classification or Indic OCR reading.
+- **Button 1 or `N` + Enter**: Triggers local VLM scene narration of what lies ahead.
+- **`Q` + Enter** (or `Ctrl+C`): Gracefully powers down the wearable system.
 
 #### Raspberry Pi Autonomous Boot Deployment (systemd):
 To launch Drishti automatically as an autonomous background appliance whenever the wearable battery pack powers on:
@@ -303,10 +307,10 @@ journalctl -u drishti.service -f
 
 | Phase | Milestone Description | Status | Verification Checkpoint |
 | :--- | :--- | :--- | :--- |
-| **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- Deterministic synthetic mock generators for headless simulation<br>- Hardware and pipeline YAML configuration schemas | ✅ **Completed** | **Checkpoint 0**: All 4 HAL drivers verified via `test_hal.py`. |
-| **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer with sub-sample fractional delay (`np.interp`)<br>- Camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier with multi-channel Canny edge contour segmentation<br>- V4L2 live webcam streaming and ALSA direct speaker output | ✅ **Completed** | **Checkpoint 1**: 1.28 ms mean PC cycle time ($> 700 \text{ FPS}$), verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
-| **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Local neural TTS audio vocalization with natural voice styling (`female1`, 0.95 conversational rate) | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
-| **Phase 3** | **Edge Privacy, Caregiver Telemetry & Companion App**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Emergency distress notification & master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 50/50 tests passing, verified via `test_anonymizer.py`, `test_telemetry.py`, `test_pipeline.py`, `test_fast_pipeline.py`. |
+| **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- ESP32 DevKit V1 serial link (`hal/esp32_link.py`) and PTY emulator (`tools/fake_esp32.py`)<br>- Bluetooth A2DP audio routing and profile recovery (`hal/audio_route.py`) | ✅ **Completed** | **Checkpoint 0**: All HAL drivers verified via `test_hal.py`, `test_esp32_link.py`, `test_audio_route.py`. |
+| **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer with sub-sample fractional delay (`np.interp`)<br>- Parallax-aware camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier with anisotropy and contour solidity gating<br>- V4L2/OpenCV live webcam streaming and ALSA/PipeWire direct speaker output | ✅ **Completed** | **Checkpoint 1**: Verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
+| **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Offline Piper neural TTS (`en_US-lessac-medium`) with non-blocking async queue and system fallbacks | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
+| **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Master pipeline coordinator | ✅ **Completed** | **Checkpoint 3**: 80/80 tests passing, verified across full pytest suite. |
 | **Phase 4** | **Field Deployment, Wearable Packaging & Hailo-8L Acceleration**<br>- Hailo-8L M.2 HAT NPU compilation and ONNX pipeline offload<br>- 3D-printed modular chest harness / spectacles frame integration<br>- Bone-conduction headset low-profile acoustic integration | 🔄 **Scheduled** | **Checkpoint 4**: Real-world field navigation and user trial evaluation. |
 
 

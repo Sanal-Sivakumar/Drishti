@@ -5,10 +5,12 @@ and programmatic/synthetic event triggers for headless testing.
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 import collections
 import threading
 import time
+
+from hal.esp32_link import Esp32Link
 
 
 class BaseTriggerInput(ABC):
@@ -109,4 +111,51 @@ class GPIOPushButtonTrigger(BaseTriggerInput):
             callback=lambda channel: callback(),
             bouncetime=int(self.debounce_sec * 1000)
         )
+
+
+class ESP32ButtonTrigger(BaseTriggerInput):
+    """Tactile buttons wired to the ESP32 and delivered over the serial link.
+
+    Presses are latched in the link's event queue, so a short tap cannot be
+    lost between two ``poll_trigger`` calls.
+    """
+
+    def __init__(self, link: Esp32Link) -> None:
+        self.link = link
+        self.callbacks: Dict[int, List[Callable[[], None]]] = {1: [], 2: []}
+
+    def poll_trigger(self, button_id: int) -> bool:
+        pressed = self.link.take_button_press(button_id)
+        if pressed:
+            for callback in self.callbacks.get(button_id, []):
+                try:
+                    callback()
+                except Exception:
+                    pass
+        return pressed
+
+    def register_callback(self, button_id: int, callback: Callable[[], None]) -> None:
+        self.callbacks.setdefault(button_id, []).append(callback)
+
+
+class CompositeTriggerInput(BaseTriggerInput):
+    """Fan-out trigger source combining physical buttons and keyboard input.
+
+    Every source is polled (no short-circuiting) so an event is consumed
+    from exactly the source that produced it.
+    """
+
+    def __init__(self, triggers: Sequence[BaseTriggerInput]) -> None:
+        self.triggers = list(triggers)
+
+    def poll_trigger(self, button_id: int) -> bool:
+        fired = False
+        for trigger in self.triggers:
+            if trigger.poll_trigger(button_id):
+                fired = True
+        return fired
+
+    def register_callback(self, button_id: int, callback: Callable[[], None]) -> None:
+        for trigger in self.triggers:
+            trigger.register_callback(button_id, callback)
 

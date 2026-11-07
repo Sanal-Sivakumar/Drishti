@@ -18,17 +18,27 @@ class SpatialDepthFuser:
         principal_point_y: float = 240.0,
         tof_cone_half_angle_deg: float = 13.5,
         class_priors_m: Optional[Dict[str, float]] = None,
+        tof_baseline_x_m: float = 0.0,
+        tof_baseline_y_m: float = 0.0,
+        tof_hit_margin_px: float = 8.0,
     ) -> None:
         self.fx = focal_length_px
         self.fy = focal_length_px
         self.cx = principal_point_x
         self.cy = principal_point_y
         self.cone_half_angle_rad = np.radians(tof_cone_half_angle_deg)
+        # Camera-to-ToF physical offset. Positive X = ToF is right of the
+        # camera; positive Y = ToF is below it. Used to correct close-range
+        # parallax between the centre of the camera image and the laser spot.
+        self.tof_baseline_x_m = float(tof_baseline_x_m)
+        self.tof_baseline_y_m = float(tof_baseline_y_m)
+        self.tof_hit_margin_px = float(tof_hit_margin_px)
         self.class_priors = class_priors_m or {
             "person": 1.70,
             "chair": 0.85,
             "door": 2.00,
             "table": 0.75,
+            "dining table": 0.75,
             "car": 1.50,
             "stairs": 1.20,
         }
@@ -46,6 +56,34 @@ class SpatialDepthFuser:
         azimuth_rad = np.arctan((u - self.cx) / self.fx)
         elevation_rad = np.arctan((v - self.cy) / self.fy)
         return float(azimuth_rad), float(elevation_rad)
+
+    def tof_spot_pixel(self, distance_m: Optional[float]) -> Tuple[float, float]:
+        """Project the laser spot into image coordinates, including parallax.
+
+        The ToF emitter and camera lens are not co-located. At distance Z the
+        baseline b produces a pixel shift ``fx * b / Z``. At long range this
+        tends to the principal point; at close range it moves outward.
+        """
+        if distance_m is None or distance_m <= 0.05:
+            return self.cx, self.cy
+        u = self.cx + self.fx * (self.tof_baseline_x_m / distance_m)
+        v = self.cy + self.fy * (self.tof_baseline_y_m / distance_m)
+        return float(u), float(v)
+
+    def bbox_contains_pixel(
+        self,
+        bbox: Tuple[float, float, float, float],
+        u: float,
+        v: float,
+        margin_px: Optional[float] = None,
+    ) -> bool:
+        """Return True when pixel (u, v) lies inside the box (+ margin)."""
+        margin = self.tof_hit_margin_px if margin_px is None else float(margin_px)
+        u_min, v_min, u_max, v_max = bbox
+        return (
+            (u_min - margin) <= u <= (u_max + margin)
+            and (v_min - margin) <= v <= (v_max + margin)
+        )
 
     def is_in_tof_cone(
         self,
@@ -159,23 +197,43 @@ class SpatialDepthFuser:
         if not raw_detections:
             return []
 
-        # Find which detections fall inside the ToF cone
-        cone_candidates = []
-        for i, det in enumerate(raw_detections):
-            bbox = det["bbox"]
-            u_min, v_min, u_max, v_max = bbox
-            if self.is_in_tof_cone(u_min, u_max, v_min, v_max):
+        # Select the detection the laser actually hits. A point-in-box test is
+        # preferred over a plain cone test because it rejects objects that
+        # merely graze the cone while another surface occupies the centre ray.
+        primary_cone_idx: Optional[int] = None
+        if tof_distance_m is not None and tof_distance_m > 0:
+            spot_u, spot_v = self.tof_spot_pixel(tof_distance_m)
+            hits = []
+            for i, det in enumerate(raw_detections):
+                bbox = det["bbox"]
+                if not self.bbox_contains_pixel(tuple(bbox), spot_u, spot_v):
+                    continue
+                u_min, v_min, u_max, v_max = bbox
+                area = max(1.0, (u_max - u_min) * (v_max - v_min))
                 u_c = (u_min + u_max) / 2.0
                 v_c = (v_min + v_max) / 2.0
                 az, el = self.compute_ray_angles(u_c, v_c)
-                angular_offset = az * az + el * el
-                cone_candidates.append((i, angular_offset))
+                hits.append((i, area, az * az + el * el))
+            if hits:
+                # Smallest box = most specific object at the laser spot.
+                hits.sort(key=lambda hit: (hit[1], hit[2]))
+                primary_cone_idx = hits[0][0]
 
-        # Sort candidate in cone closest to optical center
-        primary_cone_idx = None
-        if cone_candidates:
-            cone_candidates.sort(key=lambda c: c[1])
-            primary_cone_idx = cone_candidates[0][0]
+        # Fallback for boxes that only partially cover the laser spot (for
+        # example a chair whose backrest stops a few pixels short of centre).
+        if primary_cone_idx is None:
+            cone_candidates = []
+            for i, det in enumerate(raw_detections):
+                bbox = det["bbox"]
+                u_min, v_min, u_max, v_max = bbox
+                if self.is_in_tof_cone(u_min, u_max, v_min, v_max):
+                    u_c = (u_min + u_max) / 2.0
+                    v_c = (v_min + v_max) / 2.0
+                    az, el = self.compute_ray_angles(u_c, v_c)
+                    cone_candidates.append((i, az * az + el * el))
+            if cone_candidates:
+                cone_candidates.sort(key=lambda c: c[1])
+                primary_cone_idx = cone_candidates[0][0]
 
         fused = []
         for i, det in enumerate(raw_detections):

@@ -184,6 +184,18 @@ When an obstacle lies outside the $27^\circ$ laser cone (e.g., at the extreme le
 $$Z_{est} \approx \frac{f_y \cdot H_{real}}{h_{pixels}}$$
 where $H_{real}$ is the statistical prior height of the classified object (e.g., $1.7\text{ m}$ for a standing human, $0.85\text{ m}$ for a chair) and $h_{pixels} = v_{max} - v_{min}$ is the bounding box pixel height.
 
+### 3.6 Parallax Correction & Point-in-Bbox Laser Spot Assignment
+The optical center of the camera lens and the infrared laser emitter cannot occupy the exact same physical coordinates. Let their physical baseline offset be $(b_x, b_y)$ in meters.
+
+At distance $Z$, this physical baseline projects as a metric pixel shift on the image plane:
+$$u_{spot} = c_x + f_x \frac{b_x}{Z}, \quad v_{spot} = c_y + f_y \frac{b_y}{Z}$$
+
+At long range ($Z \to \infty$), the spot converges toward the principal point $(c_x, c_y)$. At close proximity ($Z < 1.0 \text{ m}$), parallax shifts the spot outward.
+
+Rather than assigning ToF depth to all objects merely intersecting the 2D cone, Drishti evaluates a **point-in-box hit test**:
+$$(u_{min} - \epsilon) \le u_{spot} \le (u_{max} + \epsilon) \quad \text{and} \quad (v_{min} - \epsilon) \le v_{spot} \le (v_{max} + \epsilon)$$
+where $\epsilon = 8\text{ px}$ is the tolerance margin. When multiple overlapping boxes contain the laser spot, the algorithm selects the box with the smallest 2D area (the most specific foreground obstacle). All other detections retain their geometric height priors.
+
 ---
 
 # 4. Deep Learning Edge Quantization & The Roofline Model

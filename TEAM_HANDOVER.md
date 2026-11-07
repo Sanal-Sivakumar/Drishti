@@ -85,7 +85,7 @@ All configuration is centralized in `pyproject.toml`. All functions must have co
 ```bash
 pytest tests/ -v --cov=. --cov-report=term-missing
 ```
-All 50 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
+All 80 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
 
 ### Gate 3: Quantitative Latency Budget Check
 Every perception and audio commit must be benchmarked against latency limits:
@@ -128,13 +128,13 @@ As of the current milestone, the engineering baseline stands as follows:
 
 | Subsystem / Phase | Current State | Verification Passed |
 | :--- | :--- | :--- |
-| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2/OpenCV physical camera with process lifecycle management (`__enter__`/`__exit__`, `kill()` on timeout) + ALSA non-blocking worker thread | `tests/unit/test_hal.py` (4/4 PASSED) |
-| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector with direct OpenCV letterboxing, 3D Spatial Audio (Continuous Fractional Delay interpolation via `np.interp`, ITD + ILD + PRF), Ray-Cone Depth Fusion, BGR INR Banknote Classifier with Multi-channel Canny Edge Contour Segmentation (`identify_currency`), Aspect Ratio Gating | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (18/18 PASSED) |
-| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), Multimodal Spatial Scene Narrator & ONNX VLM runner, Local Speech with Natural Voice Styling (`female1`, 0.95 conversational rate, non-overlapping audio sink gating) | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (12/12 PASSED) |
-| **Phase 3: Safety & Telemetry** | Local 2D Vectorized Gaussian Face Redaction (`cv2.GaussianBlur` priority with scipy/numpy fallbacks), Mosquitto MQTT Telemetry (TLS 1.3, QoS 1, paho v2), Master Orchestrator with default background continuous currency | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/integration/test_pipeline.py` (12/12 PASSED) |
-| **Config & Tooling** | Strict schema validation (`validate_pipeline_config`, `validate_hardware_config`), `pyproject.toml` standardized tooling, Hardware health diagnostic CLI (`scripts/check_hardware_health.py`) | `tests/unit/test_config_loader.py` (4/4 PASSED) |
-| **Hardware Verification** | Laptop webcam (`/dev/video0`), laptop speakers (`plughw:1,0` / `default`), and synthetic fallback tested live; non-destructive hardware health auditor | `scripts/check_hardware_health.py`, `scripts/run_phase1_perception.py`, `scripts/run_phase2_cognitive.py`, `scripts/run_phase3_full_system.py`, `scripts/run_live_wearable.py` |
-| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) with model SHA-256 verification and `pyproject.toml` packaging | `.github/workflows/ci.yml` (50/50 Tests Passing) |
+| **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2/OpenCV physical camera with process lifecycle management (`__enter__`/`__exit__`, `kill()` on timeout) + ESP32 DevKit V1 USB-serial 921600 baud deterministic link (`hal/esp32_link.py`) with sequence-gap detection and button latching + ALSA / PipeWire Bluetooth A2DP audio routing (`hal/audio_route.py`) | `tests/unit/test_hal.py`, `tests/unit/test_esp32_link.py`, `tests/unit/test_audio_route.py` (20/20 PASSED) |
+| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector with COCO alias normalization and synthetic chair rejection, 3D Spatial Audio (Continuous Fractional Delay interpolation via `np.interp`, ITD + ILD + PRF), Parallax-Aware Ray-Cone Depth Fusion with Point-in-Bbox Hit Testing, BGR INR Banknote Classifier with Anisotropy / Solidity Gating (`identify_currency`), Opt-in Currency Mode | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (24/24 PASSED) |
+| **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), Multimodal Spatial Scene Narrator & ONNX VLM runner, Local Speech with Offline Piper Neural Voices (`en_US-lessac-medium`) and Async Worker Queue, Natural Pacing Fallbacks (`spd-say`, `espeak-ng`) | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (15/15 PASSED) |
+| **Phase 3: Safety, Telemetry & Tools** | Local 2D Vectorized Gaussian Face Redaction (`cv2.GaussianBlur` priority with scipy/numpy fallbacks), Mosquitto MQTT Telemetry (TLS 1.3, QoS 1, paho v2), Headless Browser MJPEG Debug Viewer (`perception/debug_viewer.py` on `:8080`), PTY Fake ESP32 Emulator (`tools/fake_esp32.py`) | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/unit/test_debug_viewer.py`, `tests/integration/test_pipeline.py` (17/17 PASSED) |
+| **Config & Tooling** | Strict schema validation (`validate_pipeline_config`, `validate_hardware_config` including `esp32_serial`), `pyproject.toml` standardized tooling, Hardware health diagnostic CLI with `--serial-port` support (`scripts/check_hardware_health.py`), ESP32 probe CLI (`scripts/probe_esp32.py`) | `tests/unit/test_config_loader.py` (4/4 PASSED) |
+| **Hardware Verification** | Laptop webcam (`/dev/video0`), ESP32 DevKit V1 + VL53L0X USB-serial sensor link, stereo Bluetooth earbuds (A2DP verified), and synthetic fallback tested live; non-destructive hardware health auditor | `scripts/check_hardware_health.py`, `scripts/probe_esp32.py`, `scripts/run_live_wearable.py` |
+| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) with model SHA-256 verification and `pyproject.toml` packaging | `.github/workflows/ci.yml` (80/80 Tests Passing) |
 | **Next Tasks (Phase 4)** | Hailo-8L NPU pipeline acceleration, 3D wearable enclosure, and field navigation trials | Scheduled |
 
 

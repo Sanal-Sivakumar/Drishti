@@ -116,9 +116,14 @@ def validate_hardware_config(data: Dict[str, Any]) -> None:
         raise ConfigValidationError(f"Invalid camera backend: '{cam_backend}' (expected one of {valid_cam}).")
 
     dist_backend = data["distance_sensor"].get("backend")
-    valid_dist = ("synthetic", "vl53l1x")
+    valid_dist = ("synthetic", "vl53l1x", "esp32_serial")
     if dist_backend not in valid_dist:
         raise ConfigValidationError(f"Invalid distance_sensor backend: '{dist_backend}' (expected one of {valid_dist}).")
+
+    if dist_backend == "esp32_serial":
+        baud = data["distance_sensor"].get("baud", 921600)
+        if not isinstance(baud, int) or baud < 9600:
+            raise ConfigValidationError(f"Invalid distance_sensor.baud: {baud}.")
 
 
 def load_yaml(file_path: Path) -> Dict[str, Any]:

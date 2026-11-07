@@ -62,3 +62,48 @@ def test_speech_service_audio_sink_fallback():
     assert res["success"] is True
 
 
+def test_async_playback_queues_and_runs_worker(monkeypatch):
+    """Verify playback is queued off the perception thread."""
+    service = SpeechService(async_playback=True)
+    service.has_piper = False
+    service.has_spdsay = False
+    service.has_espeak = False
+
+    played = []
+    monkeypatch.setattr(
+        service,
+        "_play_text",
+        lambda text: (played.append(text) or ("test", True)),
+    )
+
+    result = service.speak("Chair one meter ahead.", play_audio=True)
+    assert result["queued"] is True
+    assert service.wait_until_idle(timeout=2.0) is True
+    assert played == ["Chair one meter ahead."]
+    service.stop()
+
+
+def test_sync_playback_reports_backend(monkeypatch):
+    """Verify synchronous mode (used by scripts/tests) reports the backend."""
+    service = SpeechService(async_playback=False)
+    monkeypatch.setattr(service, "_play_text", lambda text: ("piper", True))
+
+    result = service.speak("Testing playback.", play_audio=True)
+    assert result["audio_played"] is True
+    assert result["backend"] == "piper"
+    assert result["queued"] is False
+
+
+def test_piper_model_resolves_relative_to_project_root():
+    """The bundled model path must work regardless of the current directory."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    service = SpeechService(piper_model="models/piper/en_US-lessac-medium.onnx")
+    if (root / "models/piper/en_US-lessac-medium.onnx").is_file():
+        assert service.has_piper is True
+        assert Path(service.piper_model).is_absolute()
+        assert service.piper_length_scale >= 1.0
+    else:
+        assert service.piper_model is None or not service.has_piper
+
+

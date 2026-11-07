@@ -7,7 +7,9 @@ and headless synthetic range simulators for testing.
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 import numpy as np
+
 from config.logging_config import get_logger
+from hal.esp32_link import Esp32Link, LinkStatus
 
 logger = get_logger("hal.distance")
 
@@ -144,4 +146,70 @@ class VL53L1XSensor(BaseDistanceSensor):
         # Single-zone fallback when multi-zone SPAD configuration is not configured
         dist = self.get_distance_meters()
         return {"left": dist, "center": dist, "right": dist}
+
+
+class ESP32DistanceSensor(BaseDistanceSensor):
+    """VL53L0X range finder reached through an ESP32 USB-serial bridge.
+
+    The ESP32 owns the I2C timing loop and streams filtered millimetre
+    samples. The host only consumes the latest immutable sample, so the
+    perception loop can never block on serial I/O.
+
+    A single VL53L0X is a **single-ray** sensor: only the centre of the
+    scene has a true laser distance. ``get_zone_distances`` therefore
+    reports ``None`` for left/right instead of pretending to have three
+    zones.
+    """
+
+    def __init__(
+        self,
+        port: str = "auto",
+        baud: int = 921600,
+        stale_ms: float = 120.0,
+        min_valid_mm: int = 30,
+        max_valid_mm: int = 2000,
+        offset_mm: int = 0,
+        link: Optional[Esp32Link] = None,
+    ) -> None:
+        self.link = link or Esp32Link(port=port, baud=baud, stale_ms=stale_ms)
+        self.stale_ms = float(stale_ms)
+        self.min_valid_mm = int(min_valid_mm)
+        self.max_valid_mm = int(max_valid_mm)
+        self.offset_mm = int(offset_mm)
+        self.is_ranging = False
+
+    def start_ranging(self) -> None:
+        self.link.start()
+        self.is_ranging = True
+
+    def stop_ranging(self) -> None:
+        try:
+            self.link.stop()
+        finally:
+            self.is_ranging = False
+
+    def get_distance_meters(self) -> Optional[float]:
+        if not self.is_ranging:
+            return None
+
+        sample = self.link.latest()
+        if sample is None:
+            return None
+        if self.link.age_ms() > self.stale_ms:
+            return None
+        if sample.status != 0:
+            return None
+
+        millimetres = sample.mm_filtered + self.offset_mm
+        if millimetres < self.min_valid_mm or millimetres > self.max_valid_mm:
+            return None
+        return round(millimetres / 1000.0, 3)
+
+    def get_zone_distances(self) -> Dict[str, Optional[float]]:
+        """Single-ray sensor: only the centre zone is physically measured."""
+        return {"left": None, "center": self.get_distance_meters(), "right": None}
+
+    def get_link_status(self) -> LinkStatus:
+        """Expose link health for diagnostics and the debug viewer."""
+        return self.link.status()
 

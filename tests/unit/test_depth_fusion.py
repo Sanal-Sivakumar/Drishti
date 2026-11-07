@@ -82,3 +82,69 @@ def test_fuse_multiple_detections_disambiguation():
     assert "geometric_perspective_prior" in sources
 
 
+def test_tof_spot_pixel_parallax_and_point_in_bbox():
+    """Verify baseline parallax projection and point-in-box hit testing."""
+    fuser = SpatialDepthFuser(
+        focal_length_px=500.0,
+        principal_point_x=320.0,
+        principal_point_y=240.0,
+        tof_baseline_x_m=0.05,
+        tof_baseline_y_m=-0.02,
+        tof_hit_margin_px=4.0,
+    )
+
+    # At 1 m: u = 320 + 500*0.05 = 345, v = 240 + 500*(-0.02) = 230
+    spot_u, spot_v = fuser.tof_spot_pixel(1.0)
+    assert np.isclose(spot_u, 345.0)
+    assert np.isclose(spot_v, 230.0)
+
+    # At 2 m the parallax shrinks towards the principal point.
+    far_u, far_v = fuser.tof_spot_pixel(2.0)
+    assert np.isclose(far_u, 332.5)
+    assert np.isclose(far_v, 235.0)
+
+    assert fuser.bbox_contains_pixel((330.0, 210.0, 360.0, 250.0), spot_u, spot_v) is True
+    assert fuser.bbox_contains_pixel((100.0, 100.0, 200.0, 200.0), spot_u, spot_v) is False
+    # Margin expands the box by 4 px on every side.
+    assert fuser.bbox_contains_pixel((341.0, 226.0, 344.0, 229.0), spot_u, spot_v) is True
+
+
+def test_point_in_bbox_prefers_box_under_laser_spot():
+    """Point-in-box must beat the plain cone fallback when the spot is offset."""
+    fuser = SpatialDepthFuser(
+        focal_length_px=500.0,
+        principal_point_x=320.0,
+        principal_point_y=240.0,
+        tof_baseline_x_m=0.10,
+        tof_hit_margin_px=2.0,
+    )
+
+    # The laser spot at 1 m is u = 320 + 500*0.10 = 370.
+    # A is centred on the optical axis but does not cover the spot.
+    # B is the small object actually sitting under the laser.
+    raw_detections = [
+        {"bbox": [300.0, 100.0, 340.0, 380.0], "class_name": "person", "confidence": 0.9},
+        {"bbox": [360.0, 200.0, 380.0, 280.0], "class_name": "chair", "confidence": 0.8},
+    ]
+
+    fused = fuser.fuse_all_detections(raw_detections, tof_distance_m=1.0)
+
+    assert fused[0]["fusion_source"] == "geometric_perspective_prior"
+    assert fused[1]["fusion_source"] == "tof_laser_fusion"
+    assert fused[1]["distance_m"] == 1.0
+
+
+def test_no_tof_reading_keeps_geometric_priors():
+    """A stale or missing ToF sample must not be fabricated."""
+    fuser = SpatialDepthFuser(focal_length_px=500.0, principal_point_x=320.0, principal_point_y=240.0)
+    raw_detections = [
+        {"bbox": [300.0, 200.0, 340.0, 280.0], "class_name": "chair", "confidence": 0.8},
+    ]
+
+    fused = fuser.fuse_all_detections(raw_detections, tof_distance_m=None)
+
+    assert len(fused) == 1
+    assert fused[0]["fusion_source"] == "geometric_perspective_prior"
+    assert fused[0]["distance_m"] > 0
+
+

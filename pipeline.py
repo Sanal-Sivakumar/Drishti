@@ -17,6 +17,8 @@ from hal.distance_sensor import BaseDistanceSensor
 from hal.trigger_input import BaseTriggerInput
 from hal.audio_output import BaseAudioSink
 from perception.pipeline_fast import FastPerceptionPipeline
+from perception.detector import HeadlessObjectDetector
+from perception.depth_fusion import SpatialDepthFuser
 from perception.currency import IndianCurrencyRecognizer
 from cognitive.ocr_engine import MultilingualOCREngine
 from cognitive.vlm_narrator import VisionLanguageNarrator
@@ -75,6 +77,10 @@ class DrishtiMasterPipeline:
             voice_type=tts_cfg.get("voice_type", "female1"),
             pitch=tts_cfg.get("pitch", 0),
             audio_sink=self.audio_sink,
+            piper_model=tts_cfg.get("piper_model"),
+            piper_length_scale=tts_cfg.get("piper_length_scale"),
+            piper_sentence_silence=float(tts_cfg.get("piper_sentence_silence", 0.25)),
+            async_playback=bool(tts_cfg.get("async_playback", True)),
         )
         self.anonymizer = FaceAnonymizer()
 
@@ -194,6 +200,7 @@ class DrishtiMasterPipeline:
     def shutdown(self) -> None:
         """Gracefully release all hardware and pipeline resources."""
         self.is_running = False
+        self.speech_service.stop()
         self.fast_pipeline.shutdown()
         self.telemetry.disconnect()
 

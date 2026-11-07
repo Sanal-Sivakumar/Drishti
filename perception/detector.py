@@ -26,6 +26,16 @@ COCO_CLASSES = [
     "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
 ]
 
+# Human-friendly obstacle names that differ from the COCO label. Only labels
+# present in COCO_CLASSES can ever be emitted by the YOLO model; "door" and
+# "stairs" are not COCO classes and therefore never match a detection.
+CLASS_ALIASES = {
+    "table": "dining table",
+    "sofa": "couch",
+    "tv": "tv",
+    "motorbike": "motorcycle",
+}
+
 
 class HeadlessObjectDetector:
     """YOLO ONNX object detector optimized for real-time edge obstacle perception."""
@@ -36,13 +46,14 @@ class HeadlessObjectDetector:
         iou_threshold: float = 0.45,
         target_classes: Optional[List[str]] = None,
         model_path: Optional[str] = None,
-        allow_synthetic_fallback: bool = True,
+        allow_synthetic_fallback: bool = False,
     ) -> None:
         self.conf_thresh = confidence_threshold
         self.iou_thresh = iou_threshold
-        self.target_classes = target_classes or [
-            "person", "chair", "door", "stairs", "table", "car", "bicycle", "couch", "bed", "tv", "bottle"
+        requested_classes = target_classes or [
+            "person", "chair", "dining table", "car", "bicycle", "couch", "bed", "tv", "bottle"
         ]
+        self.target_classes = [CLASS_ALIASES.get(name, name) for name in requested_classes]
         self.allow_synthetic_fallback = allow_synthetic_fallback
         self.ort_session = None
 
