@@ -170,7 +170,7 @@ void setup() {
   pinMode(PIN_BUTTON_2, INPUT_PULLUP);
 
   Wire.begin(PIN_SDA, PIN_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);  // 100 kHz standard mode for robust breadboard wiring
 
   sensor.setTimeout(100);
   sensorReady = sensor.init();
@@ -195,19 +195,44 @@ void loop() {
   pollHost();
   pollButtons();
 
+  if (!sensorReady) {
+    static uint32_t lastRetryMs = 0;
+    if (millis() - lastRetryMs >= 1500) {
+      lastRetryMs = millis();
+      Wire.begin(PIN_SDA, PIN_SCL);
+      Wire.setClock(100000);
+      sensor.setTimeout(100);
+      sensorReady = sensor.init();
+      if (sensorReady) {
+        sensor.setSignalRateLimit(0.25);
+        sensor.setVcselPulsePeriod(VL53L0X::VcselPeriodPreRange, 18);
+        sensor.setVcselPulsePeriod(VL53L0X::VcselPeriodFinalRange, 14);
+        sensor.setMeasurementTimingBudget(TIMING_BUDGET_MS * 1000);
+        sensor.startContinuous();
+        Serial.printf("I,%s,VL53L0X\n", FW_VERSION);
+      } else {
+        Wire.beginTransmission(0x29);
+        uint8_t err = Wire.endTransmission();
+        if (err == 0) {
+          Serial.println("E,1,I2C device at 0x29 responded but init failed. Ensure XSHUT is tied to 3V3.");
+        } else {
+          Serial.println("E,1,No I2C ack at 0x29. Move SDA to D21, SCL to D22, VIN to 3V3, XSHUT to 3V3.");
+        }
+      }
+    }
+  }
+
   if (sensorReady) {
     uint16_t rawMm = sensor.readRangeContinuousMillimeters();
     uint8_t rangeStatus = 0;
     if (sensor.timeoutOccurred()) {
       rangeStatus = 254;
+    } else if (rawMm >= 8000 || rawMm > MAX_VALID_MM) {
+      rangeStatus = 1;  // Target out of range / no reflection
+    } else if (rawMm < MIN_VALID_MM) {
+      rangeStatus = 2;  // Below minimum valid distance
     } else {
-      // Register 0x14: RESULT_RANGE_STATUS bits [7:3] contain ST's RangeStatus
-      rangeStatus = (sensor.readReg(0x14) >> 3) & 0x0F;
-      if (rawMm >= 8000 || rawMm < MIN_VALID_MM || rawMm > MAX_VALID_MM) {
-        if (rangeStatus == 0) {
-          rangeStatus = 1;  // Signal / Range boundary error
-        }
-      }
+      rangeStatus = 0;  // Clean, valid range measurement
     }
 
     uint16_t filteredMm = medianFilter(rangeStatus == 0 ? rawMm : 0);
