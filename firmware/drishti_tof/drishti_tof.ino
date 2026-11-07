@@ -35,7 +35,7 @@ constexpr uint8_t PIN_BUTTON_1 = 32;  // Narration
 constexpr uint8_t PIN_BUTTON_2 = 33;  // Currency / OCR
 
 constexpr uint32_t SERIAL_BAUD = 921600;
-constexpr uint16_t TIMING_BUDGET_MS = 20;
+constexpr uint16_t TIMING_BUDGET_MS = 33;
 constexpr uint8_t FILTER_WINDOW = 5;
 constexpr uint16_t MIN_VALID_MM = 30;
 constexpr uint16_t MAX_VALID_MM = 2000;
@@ -172,14 +172,14 @@ void setup() {
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(100000);  // 100 kHz standard mode for robust breadboard wiring
 
-  sensor.setTimeout(100);
+  sensor.setTimeout(200);
   sensorReady = sensor.init();
 
   if (!sensorReady) {
     Serial.println("E,1,sensor_init_failed");
   } else {
     // Long-range profile (up to ~2 m on a cooperative target).
-    sensor.setSignalRateLimit(0.25);
+    sensor.setSignalRateLimit(0.1);
     sensor.setVcselPulsePeriod(VL53L0X::VcselPeriodPreRange, 18);
     sensor.setVcselPulsePeriod(VL53L0X::VcselPeriodFinalRange, 14);
     sensor.setMeasurementTimingBudget(TIMING_BUDGET_MS * 1000);
@@ -201,10 +201,10 @@ void loop() {
       lastRetryMs = millis();
       Wire.begin(PIN_SDA, PIN_SCL);
       Wire.setClock(100000);
-      sensor.setTimeout(100);
+      sensor.setTimeout(200);
       sensorReady = sensor.init();
       if (sensorReady) {
-        sensor.setSignalRateLimit(0.25);
+        sensor.setSignalRateLimit(0.1);
         sensor.setVcselPulsePeriod(VL53L0X::VcselPeriodPreRange, 18);
         sensor.setVcselPulsePeriod(VL53L0X::VcselPeriodFinalRange, 14);
         sensor.setMeasurementTimingBudget(TIMING_BUDGET_MS * 1000);
@@ -227,6 +227,11 @@ void loop() {
     uint8_t rangeStatus = 0;
     if (sensor.timeoutOccurred()) {
       rangeStatus = 254;
+      // Recover from timeout by explicitly clearing the ST hardware interrupt
+      Wire.beginTransmission(0x29);
+      Wire.write(0x0B);  // SYSTEM_INTERRUPT_CLEAR
+      Wire.write(0x01);
+      Wire.endTransmission();
     } else if (rawMm >= 8000 || rawMm > MAX_VALID_MM) {
       rangeStatus = 1;  // Target out of range / no reflection
     } else if (rawMm < MIN_VALID_MM) {

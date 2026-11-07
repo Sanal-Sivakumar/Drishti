@@ -30,7 +30,7 @@ from hal.esp32_link import Esp32Link, TofSample
 def collect_calibration_samples(
     link: Esp32Link,
     target_count: int = 100,
-    timeout_s: float = 10.0,
+    timeout_s: float = 30.0,
 ) -> Tuple[List[int], int]:
     """Collect raw millimeter samples from the ESP32 link.
 
@@ -41,6 +41,7 @@ def collect_calibration_samples(
     invalid_count = 0
     start_time = time.time()
     last_seq: Optional[int] = None
+    last_diag_time = 0.0
 
     while len(samples) < target_count and (time.time() - start_time) < timeout_s:
         frame = link.latest()
@@ -49,13 +50,25 @@ def collect_calibration_samples(
             continue
 
         last_seq = frame.seq
+        now = time.time()
         if frame.status == 0 and frame.mm_raw > 0:
             samples.append(frame.mm_raw)
             pct = int((len(samples) / target_count) * 100)
-            sys.stdout.write(f"\r[*] Collecting samples: {len(samples)}/{target_count} [{pct}%] (raw: {frame.mm_raw} mm)")
+            sys.stdout.write(f"\r[*] Collecting samples: {len(samples)}/{target_count} [{pct}%] (raw: {frame.mm_raw} mm)   ")
             sys.stdout.flush()
         else:
             invalid_count += 1
+            if now - last_diag_time > 0.4:
+                last_diag_time = now
+                status_desc = {
+                    1: "no target reflection / out of range",
+                    2: "too close (< 30 mm)",
+                    254: "sensor timeout",
+                }.get(frame.status, f"status code {frame.status}")
+                sys.stdout.write(
+                    f"\r[*] Aiming: raw={frame.mm_raw} mm ({status_desc}) | {len(samples)}/{target_count} valid   "
+                )
+                sys.stdout.flush()
 
     sys.stdout.write("\n")
     return samples, invalid_count
@@ -141,6 +154,12 @@ def main() -> None:
         help="Number of valid ranging samples to collect for statistical averaging",
     )
     parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Seconds to wait to collect valid samples (default: 30.0)",
+    )
+    parser.add_argument(
         "--save",
         action="store_true",
         help="Automatically save recommended offset_mm to config/hardware_dev.yaml",
@@ -198,7 +217,7 @@ def main() -> None:
 
         try:
             raw_samples, invalid_count = collect_calibration_samples(
-                link, target_count=args.samples, timeout_s=12.0
+                link, target_count=args.samples, timeout_s=args.timeout
             )
         finally:
             link.stop()
