@@ -211,7 +211,7 @@ def build_hardware_stack(
         if no_esp32:
             dist_backend = "synthetic"
 
-        if dist_backend == "esp32_serial":
+        if (serial_port is not None or dist_backend == "esp32_serial") and not no_esp32:
             requested_port = serial_port or str(dist_cfg.get("serial_port", "auto"))
             print(f"    -> Distance: ESP32 + VL53L0X over USB serial (port={requested_port})")
             esp_sensor = build_esp32_distance_sensor(dist_cfg, serial_port=serial_port)
