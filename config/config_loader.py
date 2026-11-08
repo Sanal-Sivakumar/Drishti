@@ -59,8 +59,10 @@ def validate_pipeline_config(data: Dict[str, Any]) -> None:
 
     width = p_sec.get("frame_width", 640)
     height = p_sec.get("frame_height", 480)
-    if width <= 0 or height <= 0:
+    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
         raise ConfigValidationError(f"Invalid frame dimensions: {width}x{height}.")
+    if p_sec.get("mode", "production") not in ("production", "simulation"):
+        raise ConfigValidationError("pipeline.mode must be 'production' or 'simulation'.")
 
     # 2. Perception subsystem
     perc = data.get("perception")
@@ -75,6 +77,16 @@ def validate_pipeline_config(data: Dict[str, Any]) -> None:
     iou = det.get("iou_threshold", 0.45)
     if not (0.0 < iou <= 1.0):
         raise ConfigValidationError(f"detector.iou_threshold must be in (0, 1], got {iou}.")
+    target_classes = det.get("target_classes", [])
+    if not isinstance(target_classes, list) or not all(isinstance(x, str) for x in target_classes):
+        raise ConfigValidationError("detector.target_classes must be a list of class names.")
+
+    fusion = perc.get("tof_fusion", {})
+    fov = fusion.get("camera_fov_h_deg", 120.0)
+    if not isinstance(fov, (int, float)) or not 1.0 < fov < 179.0:
+        raise ConfigValidationError("tof_fusion.camera_fov_h_deg must be in (1, 179).")
+    if not isinstance(fusion.get("calibration_verified", False), bool):
+        raise ConfigValidationError("tof_fusion.calibration_verified must be boolean.")
 
     # 3. Spatial Audio
     audio = perc.get("spatial_audio", {})
@@ -91,6 +103,9 @@ def validate_pipeline_config(data: Dict[str, Any]) -> None:
     safety = data.get("safety")
     if not isinstance(safety, dict):
         raise ConfigValidationError("Missing required 'safety' configuration block.")
+    telemetry = safety.get("telemetry", {})
+    if int(telemetry.get("buffer_limit", 500)) < 1:
+        raise ConfigValidationError("telemetry.buffer_limit must be positive.")
 
 
 def validate_hardware_config(data: Dict[str, Any]) -> None:
@@ -157,6 +172,30 @@ def get_pipeline_config(config_path: Optional[str] = None, validate: bool = True
     """
     path = Path(config_path) if config_path else CONFIG_DIR / "pipeline_config.yaml"
     data = load_yaml(path)
+    fusion = data.get("perception", {}).get("tof_fusion", {})
+    calibration_path = fusion.get("calibration_file")
+    if calibration_path:
+        resolved = Path(calibration_path)
+        if not resolved.is_absolute():
+            resolved = PROJECT_ROOT / resolved
+        if resolved.exists():
+            calibration = load_yaml(resolved)
+            if calibration.get("verified"):
+                mapping = {
+                    "camera_focal_length_x_px": "camera_focal_length_px",
+                    "camera_focal_length_y_px": "camera_focal_length_y_px",
+                    "principal_point_x": "principal_point_x",
+                    "principal_point_y": "principal_point_y",
+                    "camera_fov_h_deg": "camera_fov_h_deg",
+                    "baseline_x_m": "baseline_x_m",
+                    "baseline_y_m": "baseline_y_m",
+                    "tof_offset_m": "tof_offset_m",
+                }
+                for source_key, target_key in mapping.items():
+                    value = calibration.get(source_key)
+                    if value is not None:
+                        fusion[target_key] = value
+                fusion["calibration_verified"] = True
     if validate:
         validate_pipeline_config(data)
     return data

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Drishti Phase 2: Multilingual Indic OCR & On-Demand VLM Scene Narration Runner.
+"""Drishti Phase 2: OCR and grounded SmolVLM2 narration demo.
 
 Demonstrates:
 1. Multilingual Indic text extraction and Unicode NFC normalization.
-2. On-demand Vision-Language Model (VLM) navigational scene narration.
+2. On-demand SmolVLM2 image inference grounded by supplied spatial detections.
 3. Neural/System Text-to-Speech (TTS) vocalization through laptop speakers.
 """
 
@@ -20,7 +20,7 @@ import numpy as np
 
 from hal.camera import SyntheticCameraSource, V4L2CameraSource
 from cognitive.ocr_engine import MultilingualOCREngine
-from cognitive.vlm_narrator import VisionLanguageNarrator
+from cognitive.vlm_narrator import SpatialSceneNarrator
 from cognitive.speech_service import SpeechService
 
 
@@ -31,12 +31,12 @@ def main() -> None:
     args = parser.parse_args()
 
     print("=" * 78)
-    print("      DRISHTI: PHASE 2 MULTILINGUAL INDIC OCR & ON-DEMAND VLM NARRATION")
+    print("      DRISHTI: PHASE 2 OCR & GROUNDED SMOLVLM2 NARRATION")
     print("=" * 78)
 
     # Initialize Cognitive Engines
     ocr = MultilingualOCREngine(languages=["eng", "hin", "tam", "mal"])
-    vlm = VisionLanguageNarrator()
+    narrator = SpatialSceneNarrator()
     speech = SpeechService(speaking_rate=1.15)
 
     # ---------------------------------------------------------
@@ -57,9 +57,9 @@ def main() -> None:
         print(f"  • {lang_name:<20}: {normalized}")
 
     # ---------------------------------------------------------
-    # PART 2: Camera Snapshot Capture & VLM Scene Narration
+    # PART 2: Camera Snapshot Capture & Spatial Scene Narration
     # ---------------------------------------------------------
-    print("\n[2] Capturing Scene Snapshot & Querying On-Demand VLM Narration:")
+    print("\n[2] Capturing Snapshot & Formatting Supplied Spatial Detections:")
     print("-" * 78)
 
     if args.camera == "real":
@@ -78,16 +78,27 @@ def main() -> None:
 
     print(f"  [*] Snapshot captured successfully. Frame dimensions: {frame.shape}")
 
-    # Simulated obstacle context from fast perception stream
+    # Simulated *trusted* obstacle context from fast perception. Real operation
+    # obtains these fields from the confirmed YOLO + calibrated ToF pipeline.
     detected_context = [
-        {"class_name": "door", "distance_m": 2.2, "azimuth_deg": 12.5},
-        {"class_name": "chair", "distance_m": 1.4, "azimuth_deg": -15.0},
+        {
+            "class_name": "chair",
+            "distance_m": 1.4,
+            "azimuth_deg": -24.0,
+            "fusion_source": "tof_laser_fusion",
+            "confirmation_frames": 2,
+        },
     ]
 
-    vlm_result = vlm.describe_scene(frame, detected_obstacles=detected_context)
-    narration_text = vlm_result["narration"]
+    narration_result = narrator.describe_scene(
+        frame,
+        detected_obstacles=detected_context,
+        navigation_authoritative=True,
+        path_state="obstructed",
+    )
+    narration_text = narration_result["narration"]
 
-    print(f"\n  >>> VLM Navigational Description:")
+    print("\n  >>> Spatial Description:")
     print(f"      \"{narration_text}\"")
 
     # ---------------------------------------------------------
@@ -95,6 +106,10 @@ def main() -> None:
     # ---------------------------------------------------------
     print("\n[3] Vocalizing Navigational Narrative Through Audio Sink:")
     print("-" * 78)
+    if not narration_result["success"]:
+        print(f"  [!] Model output unavailable or rejected: {narration_result.get('error')}")
+        print("  [!] Nothing from the VLM will be spoken.")
+        return
     tts_result = speech.speak(narration_text, play_audio=args.speak)
 
     print(f"  • Estimated Spoken Duration: {tts_result['duration_s']} seconds")
@@ -102,10 +117,9 @@ def main() -> None:
     print(f"  • Dispatched to Speakers:   {tts_result['audio_played']}")
 
     print("\n" + "=" * 78)
-    print("  >>> CHECKPOINT 2 VERIFIED: INDIC OCR & VLM NARRATION FUNCTIONAL <<<")
+    print("  >>> CHECKPOINT 2 VERIFIED: OCR & SPATIAL NARRATION FUNCTIONAL <<<")
     print("=" * 78)
 
 
 if __name__ == "__main__":
     main()
-

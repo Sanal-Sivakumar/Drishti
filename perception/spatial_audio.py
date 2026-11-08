@@ -7,7 +7,7 @@ Duplex Theory of sound localization:
 - Proximity Pulse Repetition Frequency (PRF) and Harmonic Pitch Modulation
 """
 
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
 
@@ -20,11 +20,36 @@ class SpatialAudioSynthesizer:
         head_radius_m: float = 0.0875,
         speed_of_sound_mps: float = 343.0,
         ild_attenuation_db_per_rad: float = 12.0,
+        caution_pitch_hz: float = 440.0,
+        warning_pitch_hz: float = 660.0,
+        critical_pitch_hz: float = 880.0,
+        pulse_min_rate_hz: float = 1.0,
+        pulse_max_rate_hz: float = 10.0,
+        audio_profile: str = "air_conduction",
+        profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+        high_component_hz: float = 3200.0,
+        high_component_mix: float = 0.28,
+        limiter_peak: float = 0.35,
     ) -> None:
         self.sample_rate = sample_rate_hz
         self.head_radius = head_radius_m
         self.speed_of_sound = speed_of_sound_mps
         self.ild_attenuation_db_per_rad = ild_attenuation_db_per_rad
+        self.caution_pitch_hz = float(caution_pitch_hz)
+        self.warning_pitch_hz = float(warning_pitch_hz)
+        self.critical_pitch_hz = float(critical_pitch_hz)
+        self.pulse_min_rate_hz = float(pulse_min_rate_hz)
+        self.pulse_max_rate_hz = float(pulse_max_rate_hz)
+        self.audio_profile = audio_profile
+        profile = (profiles or {}).get(audio_profile, {})
+        self.itd_scale = float(profile.get("itd_scale", 1.0))
+        self.ild_scale = float(profile.get("ild_scale", 1.0))
+        self.left_gain = float(profile.get("left_gain", 1.0))
+        self.right_gain = float(profile.get("right_gain", 1.0))
+        self.profile_calibrated = bool(profile.get("calibrated", False))
+        self.high_component_hz = float(high_component_hz)
+        self.high_component_mix = float(np.clip(high_component_mix, 0.0, 0.5))
+        self.limiter_peak = float(np.clip(limiter_peak, 0.05, 0.95))
 
     def compute_itd_seconds(self, azimuth_rad: float) -> float:
         """Compute Interaural Time Difference (ITD) using Woodworth's spherical head model.
@@ -40,7 +65,7 @@ class SpatialAudioSynthesizer:
         # Clamp to [-pi/2, +pi/2]
         theta = float(np.clip(azimuth_rad, -np.pi / 2, np.pi / 2))
         # Woodworth formula: Delta t = (r / c) * (theta + sin(theta))
-        itd = (self.head_radius / self.speed_of_sound) * (theta + np.sin(theta))
+        itd = (self.head_radius / self.speed_of_sound) * (theta + np.sin(theta)) * self.itd_scale
         return itd
 
     def compute_ild_gains(self, azimuth_rad: float) -> Tuple[float, float]:
@@ -54,7 +79,7 @@ class SpatialAudioSynthesizer:
         """
         theta = float(np.clip(azimuth_rad, -np.pi / 2, np.pi / 2))
         # Level difference in decibels proportional to sin(theta)
-        delta_db = self.ild_attenuation_db_per_rad * np.sin(theta)
+        delta_db = self.ild_attenuation_db_per_rad * self.ild_scale * np.sin(theta)
 
         # Right ear is ipsilateral for theta > 0
         right_db = delta_db / 2.0
@@ -77,40 +102,16 @@ class SpatialAudioSynthesizer:
 
         # Pitch shifting: 440 Hz (far) -> 660 Hz (warning) -> 880 Hz (critical)
         if d >= 2.0:
-            pitch_hz = 440.0
+            pitch_hz = self.caution_pitch_hz
         elif d >= 1.0:
-            pitch_hz = 660.0
+            pitch_hz = self.warning_pitch_hz
         else:
-            pitch_hz = 880.0
+            pitch_hz = self.critical_pitch_hz
 
         # Pulse repetition rate: 1.0 Hz (at 4m) to 10.0 Hz (at 0.5m)
         # Inversely proportional to distance
-        rate_hz = float(np.clip(5.0 / d, 1.0, 10.0))
+        rate_hz = float(np.clip(5.0 / d, self.pulse_min_rate_hz, self.pulse_max_rate_hz))
         return pitch_hz, rate_hz
-
-    def synthesize_obstacle_ping(
-        self,
-        azimuth_rad: float,
-        distance_m: float,
-        duration_s: float = 0.08,
-    ) -> np.ndarray:
-        """Synthesize a single spatialized binaural audio ping.
-        
-        Args:
-            azimuth_rad: Horizontal obstacle angle (-pi/2 to +pi/2).
-            distance_m: Metric distance to obstacle.
-            duration_s: Duration of the acoustic ping pulse.
-        
-        Returns:
-            np.ndarray: Stereo audio array of shape (N, 2), dtype float32.
-        """
-        pitch_hz, _ = self.compute_pitch_and_pulse_rate(distance_m)
-        num_samples = int(self.sample_rate * duration_s)
-        t = np.linspace(0, duration_s, num_samples, endpoint=False, dtype=np.float32)
-
-        # Generate base tone with smooth Tukey / Hann amplitude envelope to prevent speaker click
-        envelope = np.sin(np.pi * np.linspace(0, 1, num_samples, dtype=np.float32)) ** 2
-        base_tone = np.sin(2.0 * np.pi * pitch_hz * t) * envelope
 
     @staticmethod
     def apply_fractional_delay(signal: np.ndarray, delay_samples: float) -> np.ndarray:
@@ -154,7 +155,14 @@ class SpatialAudioSynthesizer:
 
         # Generate base tone with smooth Tukey / Hann amplitude envelope to prevent speaker click
         envelope = np.sin(np.pi * np.linspace(0, 1, num_samples, dtype=np.float32)) ** 2
-        base_tone = np.sin(2.0 * np.pi * pitch_hz * t) * envelope
+        low = np.sin(2.0 * np.pi * pitch_hz * t)
+        # Two close upper-band components provide a robust 2-5 kHz ILD cue
+        # without random output, preserving deterministic tests/calibration.
+        high = 0.5 * (
+            np.sin(2.0 * np.pi * self.high_component_hz * t + 0.31)
+            + np.sin(2.0 * np.pi * (self.high_component_hz * 1.19) * t + 1.07)
+        )
+        base_tone = ((1.0 - self.high_component_mix) * low + self.high_component_mix * high) * envelope
 
         # Compute ITD time delay in fractional samples
         itd_seconds = self.compute_itd_seconds(azimuth_rad)
@@ -163,8 +171,8 @@ class SpatialAudioSynthesizer:
         # Compute ILD gains
         gain_left, gain_right = self.compute_ild_gains(azimuth_rad)
 
-        left_channel = np.copy(base_tone) * gain_left
-        right_channel = np.copy(base_tone) * gain_right
+        left_channel = np.copy(base_tone) * gain_left * self.left_gain
+        right_channel = np.copy(base_tone) * gain_right * self.right_gain
 
         # Apply continuous fractional delay for sub-sample spatial localization precision
         if delay_samples > 0.001:
@@ -178,10 +186,10 @@ class SpatialAudioSynthesizer:
         # Stack into (N, 2) stereo buffer
         stereo_pcm = np.column_stack([left_channel, right_channel]).astype(np.float32)
 
-        # Normalize to prevent digital clipping
+        # Conservative digital limiter; acoustic SPL still requires per-device
+        # calibration and must not be inferred from this sample peak.
         max_val = np.max(np.abs(stereo_pcm))
-        if max_val > 1.0:
-            stereo_pcm /= max_val
+        if max_val > self.limiter_peak:
+            stereo_pcm *= self.limiter_peak / max_val
 
         return stereo_pcm
-

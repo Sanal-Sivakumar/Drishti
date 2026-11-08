@@ -22,6 +22,14 @@ class BaseDistanceSensor(ABC):
         """Initialize and begin active sensor ranging."""
         pass
 
+    @property
+    def is_synthetic(self) -> bool:
+        return False
+
+    @property
+    def is_available(self) -> bool:
+        return True
+
     @abstractmethod
     def stop_ranging(self) -> None:
         """Halt active sensor ranging to conserve power."""
@@ -62,6 +70,10 @@ class SyntheticDistanceSensor(BaseDistanceSensor):
         self.max_limit = max_limit_m
         self.is_ranging = False
         self.step_count = 0
+
+    @property
+    def is_synthetic(self) -> bool:
+        return True
 
     def start_ranging(self) -> None:
         self.is_ranging = True
@@ -122,6 +134,10 @@ class VL53L1XSensor(BaseDistanceSensor):
             except Exception as e:
                 logger.error("Error starting VL53L1X ranging: %s", e)
                 self.is_ranging = False
+
+    @property
+    def is_available(self) -> bool:
+        return self.sensor is not None
 
     def stop_ranging(self) -> None:
         if self.sensor is not None and self.is_ranging:
@@ -213,3 +229,30 @@ class ESP32DistanceSensor(BaseDistanceSensor):
         """Expose link health for diagnostics and the debug viewer."""
         return self.link.status()
 
+    @property
+    def is_available(self) -> bool:
+        return self.link.latest() is not None and self.link.age_ms() <= self.stale_ms
+
+
+class UnavailableDistanceSensor(BaseDistanceSensor):
+    """Explicit fail-closed range source used when physical ranging is absent."""
+
+    def __init__(self, reason: str = "distance sensor unavailable") -> None:
+        self.reason = reason
+        self.is_ranging = False
+
+    @property
+    def is_available(self) -> bool:
+        return False
+
+    def start_ranging(self) -> None:
+        self.is_ranging = True
+
+    def stop_ranging(self) -> None:
+        self.is_ranging = False
+
+    def get_distance_meters(self) -> Optional[float]:
+        return None
+
+    def get_zone_distances(self) -> Dict[str, Optional[float]]:
+        return {"left": None, "center": None, "right": None}

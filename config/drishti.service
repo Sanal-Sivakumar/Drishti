@@ -8,12 +8,16 @@ User=pi
 Group=pi
 WorkingDirectory=/home/pi/Drishti
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/drishti/drishti.env
 ExecStart=/home/pi/Drishti/.venv/bin/python3 /home/pi/Drishti/scripts/run_live_wearable.py --hardware rpi
 Restart=always
 RestartSec=3
 KillSignal=SIGINT
 TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/pi/Drishti/var
 
 [Install]
 WantedBy=multi-user.target
-

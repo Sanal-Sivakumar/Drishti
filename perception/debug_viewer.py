@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import threading
 import time
+import json
 from http import server
 from typing import Any, Dict, List, Optional
 
@@ -132,6 +133,16 @@ class _StreamHandler(server.BaseHTTPRequestHandler):
             self.wfile.write(jpeg)
             return
 
+        if self.path.startswith("/metrics"):
+            body = json.dumps(viewer.latest_metrics(), separators=(",", ":")).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         self.send_error(404)
 
     def _stream(self, viewer: "DebugViewer") -> None:
@@ -182,6 +193,7 @@ class DebugViewer:
         self._server: Optional[_ViewerServer] = None
         self._thread: Optional[threading.Thread] = None
         self._frames = 0
+        self._latest_result: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -223,6 +235,10 @@ class DebugViewer:
         with self._lock:
             return self._jpeg
 
+    def latest_metrics(self) -> Dict[str, Any]:
+        with self._lock:
+            return {"frames": self._frames, "perception": dict(self._latest_result)}
+
     def update(
         self,
         frame: Optional[np.ndarray],
@@ -244,6 +260,7 @@ class DebugViewer:
         with self._lock:
             self._jpeg = buffer.tobytes()
             self._frames += 1
+            self._latest_result = dict(fast_result or {})
 
     @staticmethod
     def annotate(

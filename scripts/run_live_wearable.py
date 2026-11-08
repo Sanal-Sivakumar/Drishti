@@ -6,8 +6,8 @@ Runs all capabilities concurrently:
 1. Continuous sub-100ms 3D spatial obstacle avoidance via binaural audio.
 2. On-demand Indian currency recognition / Indic OCR via tactile Button 2 or C
    (continuous currency scanning is opt-in, and off by default on laptop).
-3. On-demand multilingual Indic OCR & local VLM scene narration via tactile triggers / keys.
-4. Local 2D Gaussian face redaction privacy filter.
+3. On-demand multilingual Indic OCR and sensor-grounded SmolVLM2 narration.
+4. Local Haar-cascade face detection and Gaussian redaction.
 5. Caregiver MQTT telemetry with QoS 1 and Last Will and Testament.
 """
 
@@ -32,6 +32,7 @@ from hal.distance_sensor import (
     VL53L1XSensor,
     SyntheticDistanceSensor,
     ESP32DistanceSensor,
+    UnavailableDistanceSensor,
 )
 from hal.trigger_input import (
     BaseTriggerInput,
@@ -124,8 +125,11 @@ def build_hardware_stack(
 
     if hardware_mode == "rpi":
         # Raspberry Pi 5 physical peripheral stack
-        print("    -> Camera: Initializing Camera Module (with automatic fallback)")
-        camera = create_camera_source(backend="auto", device_path="/dev/video0", width=width, height=height, fps=fps)
+        print("    -> Camera: Initializing configured physical camera")
+        camera = create_camera_source(
+            backend=str(cam_cfg.get("backend", "libcamera")), device_path="/dev/video0",
+            width=width, height=height, fps=fps, allow_synthetic_fallback=False,
+        )
 
         dist_backend = str(dist_cfg.get("backend", "vl53l1x"))
         if serial_port is not None or dist_backend == "esp32_serial":
@@ -142,10 +146,10 @@ def build_hardware_stack(
                 status = esp_sensor.get_link_status()
                 print(
                     f"    [!] No ToF frames from ESP32 ({status.last_error or 'timeout'}). "
-                    "Falling back to synthetic distance."
+                    "Navigation will remain NOT READY."
                 )
                 esp_sensor.stop_ranging()
-                distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+                distance_sensor = UnavailableDistanceSensor()
                 esp_trigger: Optional[ESP32ButtonTrigger] = None
             else:
                 time.sleep(0.1)
@@ -168,10 +172,11 @@ def build_hardware_stack(
             i2c_addr = dist_cfg.get("i2c_address", 0x29)
             print(f"    -> Distance: ST VL53L1X Time-of-Flight (I2C Bus {i2c_bus}, Address 0x{i2c_addr:02X})")
             try:
-                distance_sensor = VL53L1XSensor(i2c_bus=i2c_bus, i2c_address=i2c_addr)
+                candidate = VL53L1XSensor(i2c_bus=i2c_bus, i2c_address=i2c_addr)
+                distance_sensor = candidate if candidate.is_available else UnavailableDistanceSensor()
             except Exception as e:
-                print(f"    [!] VL53L1X I2C notice ({e}). Falling back to synthetic depth prior.")
-                distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+                print(f"    [!] VL53L1X I2C unavailable ({e}). Navigation will remain NOT READY.")
+                distance_sensor = UnavailableDistanceSensor()
 
             pin_b1 = trig_cfg.get("pin_button_narration", 17)
             pin_b2 = trig_cfg.get("pin_button_currency_ocr", 27)
@@ -205,6 +210,7 @@ def build_hardware_stack(
             height=height,
             fps=fps,
             device_index=requested_index,
+            allow_synthetic_fallback=False,
         )
 
         dist_backend = str(dist_cfg.get("backend", "synthetic"))
@@ -226,10 +232,10 @@ def build_hardware_stack(
                 status = esp_sensor.get_link_status()
                 print(
                     f"    [!] No ToF frames from ESP32 ({status.last_error or 'timeout'}). "
-                    "Falling back to synthetic distance."
+                    "Navigation will remain NOT READY."
                 )
                 esp_sensor.stop_ranging()
-                distance_sensor: BaseDistanceSensor = SyntheticDistanceSensor(base_distance_m=1.75)
+                distance_sensor: BaseDistanceSensor = UnavailableDistanceSensor()
                 esp_trigger: Optional[ESP32ButtonTrigger] = None
             else:
                 # Let the boot banner arrive on the first heartbeat before printing.
@@ -245,8 +251,8 @@ def build_hardware_stack(
                 distance_sensor = esp_sensor
                 esp_trigger = ESP32ButtonTrigger(esp_sensor.link)
         else:
-            print("    -> Distance: Synthetic raycast distance simulator")
-            distance_sensor = SyntheticDistanceSensor(base_distance_m=1.75)
+            print("    -> Distance: unavailable (use --hardware synthetic for labeled simulation)")
+            distance_sensor = UnavailableDistanceSensor()
             esp_trigger = None
 
         if esp_trigger is not None:
@@ -311,7 +317,8 @@ def build_viewer_status_lines(
             f"az {hazard['azimuth_deg']:+.0f} deg | source {hazard['fusion_source']}"
         )
     else:
-        lines.append("PRIMARY: path clear")
+        state = fast_result.get("path_state", "unknown")
+        lines.append("PRIMARY: path clear" if state == "clear" else f"NAVIGATION: {state.upper()}")
     return lines
 
 
@@ -397,7 +404,7 @@ def main() -> None:
         target = args.hardware
         if target == "auto":
             target = "rpi" if is_raspberry_pi() else "laptop"
-        args.continuous_currency = target != "laptop"
+        args.continuous_currency = False
 
     print("=" * 80)
     print("        DRISHTI ASSISTIVE WEARABLE: AUTONOMOUS LIVE SYSTEM")
@@ -423,7 +430,13 @@ def main() -> None:
         broker_host=telem_cfg.get("broker_host", "localhost"),
         broker_port=telem_cfg.get("broker_port", 1883),
         use_tls=telem_cfg.get("use_tls", False),
+        ca_certs=telem_cfg.get("ca_certs"),
         qos=telem_cfg.get("qos", 1),
+        username=os.environ.get(telem_cfg.get("username_env", "DRISHTI_MQTT_USERNAME")),
+        password=os.environ.get(telem_cfg.get("password_env", "DRISHTI_MQTT_PASSWORD")),
+        buffer_limit=telem_cfg.get("buffer_limit", 500),
+        persistence_path=telem_cfg.get("persistence_path"),
+        require_auth=telem_cfg.get("require_auth", True),
     )
     is_telem_connected = telemetry.connect()
     if is_telem_connected:
@@ -441,6 +454,9 @@ def main() -> None:
         continuous_currency=args.continuous_currency,
         currency_interval=args.currency_interval,
         currency_cooldown_s=args.currency_cooldown,
+        pipeline_config=pipeline_cfg,
+        mode="simulation" if args.hardware == "synthetic" else "production",
+        speech_enabled=not args.no_speech,
     )
 
     # 5. Setup Graceful Shutdown Handler
@@ -515,27 +531,26 @@ def main() -> None:
                     az = f"{hazard['azimuth_deg']:+.1f}°"
                     coords = f"[{hazard['coords_3d_m'][0]:+.2f}, {hazard['coords_3d_m'][1]:+.2f}, {hazard['coords_3d_m'][2]:.2f}]"
                     line = f"Cycle {cycle_count:<5} | {cls_name:<9} | {dist:<8} | {az:<7} | 3D: {coords:<20} | {lat:5.1f} ms ({fps:4.1f} FPS)"
-                else:
+                elif fast.get("path_state") == "clear":
                     line = f"Cycle {cycle_count:<5} | Path Clear| --       | --      | 3D: --                   | {lat:5.1f} ms ({fps:4.1f} FPS)"
+                else:
+                    line = f"Cycle {cycle_count:<5} | NAV NOT READY | {fast.get('path_state', 'unknown').upper()} | {lat:5.1f} ms"
 
                 print(line)
+            else:
+                issues = fast.get("readiness", {}).get("issues", [])
+                codes = ", ".join(x.get("code", "UNKNOWN") for x in issues) or fast.get("error", "unknown")
+                print(f"Cycle {cycle_count:<5} | NAVIGATION NOT READY | {codes}")
 
             # Continuous currency detected
-            if "continuous_currency" in res:
-                c = res["continuous_currency"]
-                print(f"  >>> [CURRENCY ANNOUNCED] Spoken: \"{c['spoken_name']}\" (Confidence: {c['confidence']:.2f})")
-
-            # Tactile Button 1 Narration event
-            if "narration" in res:
-                print(f"  >>> [VLM NARRATION] Spoken: \"{res['narration']}\"")
-
-            # Tactile Button 2 Currency / OCR event
-            if "currency" in res:
-                c = res["currency"]
-                print(f"  >>> [TACTILE CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c['confidence']:.2f})")
-            elif "ocr" in res:
-                ocr_text = res["ocr"].get("text") or "No clear text detected."
-                print(f"  >>> [TACTILE OCR] Spoken: \"{ocr_text}\"")
+            for cognitive in res.get("cognitive_results", []):
+                if "narration" in cognitive:
+                    print(f"  >>> [SCENE NARRATION] Spoken: \"{cognitive['narration']}\"")
+                elif cognitive.get("currency", {}).get("denomination") is not None:
+                    c = cognitive["currency"]
+                    print(f"  >>> [CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c['confidence']:.2f})")
+                elif "ocr" in cognitive:
+                    print(f"  >>> [OCR] Spoken: \"{cognitive['ocr'].get('text') or 'No clear text detected.'}\"")
 
             # 30 FPS pacing yield
             time.sleep(0.02)
@@ -548,6 +563,7 @@ def main() -> None:
             viewer.stop()
         if not args.no_speech:
             pipeline.speech_service.speak("Drishti powering down.", play_audio=True)
+            pipeline.speech_service.wait_until_idle(timeout=3.0)
         pipeline.shutdown()
         total_time = time.time() - t_start
         mean_fps = cycle_count / max(total_time, 0.001)
@@ -556,4 +572,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -1,0 +1,17 @@
+# Replace paths with the locally collected, consented wearable-camera dataset.
+path: datasets/drishti_hazards
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: person
+  1: chair
+  2: table
+  3: car
+  4: bicycle
+  5: pole
+  6: stairs
+  7: curb
+  8: glass door
+  9: hanging obstacle
+  10: partial furniture

@@ -53,14 +53,27 @@ def check_camera() -> Dict[str, Any]:
     has_ffmpeg = shutil.which("ffmpeg") is not None
     status["details"].append(f"ffmpeg binary: {'AVAILABLE' if has_ffmpeg else 'MISSING'}")
 
-    if opencv_ok or (dev_exists and has_ffmpeg):
+    picamera_ok = False
+    if not opencv_ok:
+        try:
+            from hal.camera import Picamera2CameraSource
+
+            picamera = Picamera2CameraSource(width=640, height=480, fps=30)
+            captured, frame = picamera.read_frame()
+            picamera_ok = bool(captured and frame is not None and frame.size > 0)
+            status["details"].append(f"Picamera2 capture: {'OK' if picamera_ok else 'UNAVAILABLE'}")
+            picamera.release()
+        except Exception as exc:
+            status["details"].append(f"Picamera2 probe notice: {exc}")
+
+    if opencv_ok or picamera_ok or (dev_exists and has_ffmpeg):
         status["status"] = "OK"
     elif dev_exists:
         status["status"] = "WARNING"
         status["details"].append("Device present but stream failed. Refer to troubleshoot.md §1.2.")
     else:
-        status["status"] = "SYNTHETIC_FALLBACK"
-        status["details"].append("No physical camera detected. Operating in autonomous synthetic simulation.")
+        status["status"] = "NOT_READY"
+        status["details"].append("No physical camera detected. Production navigation is suppressed.")
 
     return status
 
@@ -127,8 +140,8 @@ def check_distance_sensor(serial_port: str = "auto") -> Dict[str, Any]:
             status["status"] = "WARNING"
             status["details"].append(f"I2C connect notice: {e}. Check wiring on GPIO Pin 3/5.")
     else:
-        status["status"] = "SYNTHETIC_FALLBACK"
-        status["details"].append("Physical ToF sensor absent. Using synthetic raycast depth prior.")
+        status["status"] = "NOT_READY"
+        status["details"].append("Physical ToF sensor absent. Production navigation is suppressed.")
 
     return status
 
@@ -153,7 +166,7 @@ def check_audio_output() -> Dict[str, Any]:
     if has_aplay or has_sd:
         status["status"] = "OK"
     else:
-        status["status"] = "SYNTHETIC_FALLBACK"
+        status["status"] = "NOT_READY"
         status["details"].append("No hardware audio output found. Headless buffer recorder active.")
 
     return status
@@ -181,7 +194,19 @@ def check_neural_models() -> Dict[str, Any]:
                 h.update(chunk)
         digest = h.hexdigest()
         status["details"].append(f"Model: {model_path.name} ({size_kb} KB, SHA-256: {digest[:16]}...)")
-        status["status"] = "OK"
+        try:
+            from perception.detector import HeadlessObjectDetector
+
+            detector = HeadlessObjectDetector(model_path=str(model_path), allow_synthetic_fallback=False)
+            if detector.is_real_model_available:
+                status["status"] = "OK"
+                status["details"].append("Warm-up inference and COCO output contract: OK")
+            else:
+                status["status"] = "FAIL"
+                status["details"].append("Model exists but failed load/warm-up/output validation.")
+        except Exception as exc:
+            status["status"] = "FAIL"
+            status["details"].append(f"Model validation failed: {exc}")
     else:
         status["status"] = "MISSING_WEIGHTS"
         status["details"].append("models/yolov8n.onnx missing. Run 'python scripts/download_models.py'.")
@@ -215,7 +240,7 @@ def main() -> int:
         print(f"\n{badge:<20} {c['name']}")
         for d in c["details"]:
             print(f"    * {d}")
-        if c["status"] in ("FAIL", "MISSING_WEIGHTS"):
+        if c["status"] != "OK":
             all_passed = False
 
     print("\n" + "=" * 76)
@@ -230,4 +255,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -53,3 +53,25 @@ def test_fast_perception_latency_budget():
 
     pipeline.shutdown()
 
+
+def test_close_tof_creates_immediate_unclassified_hazard_without_detection():
+    class NoDetections:
+        is_real_model_available = True
+        unsupported_target_classes = []
+
+        def detect(self, frame):
+            return []
+
+    pipeline = FastPerceptionPipeline(
+        camera=SyntheticCameraSource(width=320, height=240),
+        distance_sensor=SyntheticDistanceSensor(base_distance_m=0.45, noise_std_m=0.0),
+        audio_sink=HeadlessAudioRecorder(),
+        detector=NoDetections(),
+        mode="simulation",
+        config={"perception": {"spatial_audio": {"critical_tof_distance_m": 0.8}}},
+    )
+    result = pipeline.step()
+    assert result["primary_hazard"]["class_name"] == "unclassified obstacle"
+    assert result["primary_hazard"]["fusion_source"] == "tof_only"
+    assert result["audio_synthesized"] is True
+    pipeline.shutdown()

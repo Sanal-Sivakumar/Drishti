@@ -63,3 +63,7 @@ def test_face_detection_from_person_box():
     assert y2 < 200  # Head is top portion of person box
 
 
+def test_real_face_detector_is_loaded():
+    """The production anonymizer must load an actual local face detector."""
+    assert FaceAnonymizer().face_cascade is not None
+

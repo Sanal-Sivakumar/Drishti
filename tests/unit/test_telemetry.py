@@ -15,8 +15,38 @@ def test_heartbeat_payload_schema():
     assert payload["cpu_temp_c"] == 48.5
     assert payload["system_state"] == "ACTIVE_NAVIGATION"
     assert "gps" in payload
-    assert "latitude" in payload["gps"]
-    assert "longitude" in payload["gps"]
+    # No GPS hardware/environment means unknown, never a fabricated location.
+    assert payload["gps"] is None
+
+
+def test_telemetry_buffer_is_bounded():
+    client = TelemetryClient(device_id="bounded", buffer_limit=3)
+    for index in range(10):
+        client.publish_event("TEST", {"index": index})
+    assert len(client.buffered_telemetry) == 3
+
+
+def test_persistence_reload_and_puback_removal(tmp_path):
+    path = tmp_path / "telemetry.jsonl"
+    client = TelemetryClient(device_id="persisted", buffer_limit=3, persistence_path=str(path))
+    client.publish_event("ONE")
+    reloaded = TelemetryClient(device_id="persisted", buffer_limit=3, persistence_path=str(path))
+    assert len(reloaded.buffered_telemetry) == 1
+
+    class Info:
+        mid = 42
+
+    class FakeMqtt:
+        def publish(self, *args, **kwargs):
+            return Info()
+
+    reloaded.mqtt_client = FakeMqtt()
+    reloaded.is_connected = True
+    reloaded._replay_buffer()
+    assert 42 in reloaded.pending_acks
+    reloaded._on_publish(None, None, 42)
+    assert len(reloaded.buffered_telemetry) == 0
+    assert path.read_text(encoding="utf-8") == ""
 
 
 def test_publish_emergency_alert():
@@ -48,5 +78,3 @@ def test_publish_event():
     assert event["status"] == "INFORMATIONAL"
     assert event["details"]["faces_redacted"] == 1
     assert len(client.buffered_telemetry) >= 1
-
-

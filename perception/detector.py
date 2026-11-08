@@ -7,6 +7,7 @@ normalization, non-maximum suppression (NMS), and dynamic execution providers.
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 import os
+import json
 import numpy as np
 from config.logging_config import get_logger
 
@@ -46,6 +47,7 @@ class HeadlessObjectDetector:
         iou_threshold: float = 0.45,
         target_classes: Optional[List[str]] = None,
         model_path: Optional[str] = None,
+        label_map_path: Optional[str] = None,
         allow_synthetic_fallback: bool = False,
     ) -> None:
         self.conf_thresh = confidence_threshold
@@ -53,7 +55,24 @@ class HeadlessObjectDetector:
         requested_classes = target_classes or [
             "person", "chair", "dining table", "car", "bicycle", "couch", "bed", "tv", "bottle"
         ]
+        self.class_names = list(COCO_CLASSES)
+        if label_map_path and Path(label_map_path).is_file():
+            loaded = json.loads(Path(label_map_path).read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                loaded = [loaded[str(index)] for index in range(len(loaded))]
+            if not isinstance(loaded, list) or not loaded or not all(isinstance(x, str) for x in loaded):
+                raise ValueError("Detector label map must be a non-empty JSON list or indexed object")
+            self.class_names = loaded
         self.target_classes = [CLASS_ALIASES.get(name, name) for name in requested_classes]
+        self.unsupported_target_classes = sorted(
+            {name for name in self.target_classes if name not in self.class_names}
+        )
+        if self.unsupported_target_classes:
+            logger.warning(
+                "Configured target classes are not in COCO and cannot be detected: %s",
+                ", ".join(self.unsupported_target_classes),
+            )
+        self.target_classes = [name for name in self.target_classes if name in self.class_names]
         self.allow_synthetic_fallback = allow_synthetic_fallback
         self.input_size = (640, 640)
         self.ort_session = None
@@ -80,6 +99,7 @@ class HeadlessObjectDetector:
                     if p in available_providers
                 ]
                 self.ort_session = ort.InferenceSession(self.model_path, providers=chosen_providers)
+                self._validate_model_contract()
                 logger.info("Loaded real YOLO model: %s via %s", self.model_path, chosen_providers)
             except Exception as e:
                 logger.warning("Could not initialize ONNX Runtime session: %s", e)
@@ -87,6 +107,47 @@ class HeadlessObjectDetector:
         else:
             if not self.allow_synthetic_fallback:
                 logger.warning("No ONNX model weights found at models/yolov8n.onnx.")
+
+    @property
+    def is_available(self) -> bool:
+        return self.ort_session is not None or self.allow_synthetic_fallback
+
+    @property
+    def is_real_model_available(self) -> bool:
+        return self.ort_session is not None
+
+    def _validate_model_contract(self) -> None:
+        """Reject incompatible ONNX exports before navigation starts."""
+        if self.ort_session is None:
+            return
+        inputs = self.ort_session.get_inputs()
+        outputs = self.ort_session.get_outputs()
+        if len(inputs) != 1 or not outputs:
+            raise ValueError("YOLO model must expose one image input and at least one output")
+        shape = list(inputs[0].shape)
+        if len(shape) != 4:
+            raise ValueError(f"YOLO input must be NCHW rank 4, got {shape}")
+        channels = shape[1]
+        if isinstance(channels, int) and channels != 3:
+            raise ValueError(f"YOLO input must have three colour channels, got {channels}")
+        height = shape[2] if isinstance(shape[2], int) and shape[2] > 0 else self.input_size[1]
+        width = shape[3] if isinstance(shape[3], int) and shape[3] > 0 else self.input_size[0]
+        self.input_size = (int(width), int(height))
+
+        # A real warm-up inference validates the exported graph and output
+        # layout before readiness can become authoritative.
+        sample = np.zeros((1, 3, int(height), int(width)), dtype=np.float32)
+        actual = self.ort_session.run(None, {inputs[0].name: sample})
+        if not actual or not isinstance(actual[0], np.ndarray):
+            raise ValueError("YOLO model produced no tensor output")
+        tensor = actual[0]
+        expected_features = 4 + len(self.class_names)
+        if tensor.ndim != 3 or tensor.shape[0] != 1 or expected_features not in tensor.shape[1:]:
+            raise ValueError(
+                f"Expected raw YOLO output with {expected_features} features, got {tensor.shape}"
+            )
+        if not np.all(np.isfinite(tensor)):
+            raise ValueError("YOLO warm-up output contains NaN or infinite values")
 
     @staticmethod
     def letterbox_image(
@@ -183,7 +244,9 @@ class HeadlessObjectDetector:
             # 1. Letterbox resize to target size
             letterboxed, scale, (pad_x, pad_y) = self.letterbox_image(frame, target_size=self.input_size)
             # 2. Normalize to float32 [0.0, 1.0] and convert to NCHW
-            blob = letterboxed.astype(np.float32) / 255.0
+            # Camera contract is BGR; YOLOv8 exports expect RGB.
+            rgb = letterboxed[:, :, ::-1]
+            blob = rgb.astype(np.float32) / 255.0
             blob = np.transpose(blob, (2, 0, 1))
             blob = np.expand_dims(blob, axis=0)
 
@@ -225,13 +288,21 @@ class HeadlessObjectDetector:
         """
         detections: List[Dict[str, Any]] = []
         preds = outputs[0]  # Shape: (1, 84, 8400)
+        if not isinstance(preds, np.ndarray) or preds.ndim not in (2, 3):
+            raise ValueError(f"Unsupported YOLO output tensor: {type(preds)!r}")
         if preds.ndim == 3:
+            if preds.shape[0] != 1:
+                raise ValueError(f"YOLO output batch must be one, got {preds.shape}")
             preds = preds[0]
         if preds.shape[0] < preds.shape[1]:
             preds = preds.T  # Transpose to (8400, 84)
 
         if preds.shape[0] == 0:
             return []
+        if preds.shape[1] < 5:
+            raise ValueError(f"YOLO output must contain box and class scores, got {preds.shape}")
+        if not np.all(np.isfinite(preds)):
+            raise ValueError("YOLO output contains NaN or infinite values")
 
         boxes = preds[:, :4].copy()
         scores = preds[:, 4:]
@@ -255,7 +326,7 @@ class HeadlessObjectDetector:
             filtered_boxes[:, 3] *= target_h
 
         for (cx, cy, bw, bh), cid, conf in zip(filtered_boxes, filtered_cids, filtered_confs):
-            cls_name = COCO_CLASSES[cid] if cid < len(COCO_CLASSES) else f"class_{cid}"
+            cls_name = self.class_names[cid] if cid < len(self.class_names) else f"class_{cid}"
             if self.target_classes and cls_name not in self.target_classes:
                 continue
 

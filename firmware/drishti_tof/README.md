@@ -3,6 +3,8 @@
 Firmware for the ESP32 DevKit V1 that owns the VL53L0X ranging loop and the
 two tactile buttons, and streams them to the laptop/Pi over USB serial.
 
+This is the **current prototype sensor MCU**, not the proposed product depth architecture. VL53L0X is a single-zone, forward range source; it cannot detect a complete corridor, curbs/drop-offs outside its ray, or overhead hazards. The future roadmap evaluates multizone/dense depth, a downward channel, IMU synchronization, and an independent safety watchdog; see [`../../docs/INDUSTRY_ROADMAP.md`](../../docs/INDUSTRY_ROADMAP.md).
+
 - **Wiring:** see [`WIRING.md`](WIRING.md)
 - **Host driver:** `hal/esp32_link.py`
 - **Emulator (no hardware):** `tools/fake_esp32.py`
@@ -94,3 +96,5 @@ Constants live at the top of `drishti_tof.ino`:
 - **Single sensor:** the VL53L0X is a single-ray rangefinder. For a second
   sensor (e.g. downward for drop-offs) use `XSHUT` to assign a different I2C
   address at boot, then extend the `D` line with a sensor id.
+- The 33 ms timing budget is not an end-to-end latency guarantee. Measure MCU timestamp to physical audio/haptic onset on the assembled system.
+- Product firmware will require authenticated/rollback-capable update design, watchdog/fault latching, production test, version traceability, and a documented safe state.

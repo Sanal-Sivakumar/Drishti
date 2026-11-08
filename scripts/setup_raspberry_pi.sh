@@ -27,7 +27,7 @@ sudo apt-get install -y \
     tesseract-ocr tesseract-ocr-hin tesseract-ocr-tam tesseract-ocr-mal \
     mosquitto mosquitto-clients \
     pipewire pipewire-pulse \
-    python3 python3-pip python3-venv
+    python3 python3-pip python3-venv python3-picamera2 opencv-data
 
 # 2. Hardware User Groups & Permissions
 echo "[2/6] Configuring user permissions for Camera, Audio, I2C, and UART..."
@@ -48,16 +48,17 @@ sudo udevadm trigger || true
 echo "[4/6] Setting up Python virtual environment..."
 cd "$PROJECT_ROOT"
 if [ ! -d ".venv" ]; then
-    python3 -m venv .venv
+    python3 -m venv --system-site-packages .venv
 fi
 
 # Ensure pip & wheel are modern
 .venv/bin/python3 -m pip install --upgrade pip setuptools wheel
-.venv/bin/python3 -m pip install -r requirements.txt
+.venv/bin/python3 -m pip install ".[pi,vlm]"
 
 # 5. Neural Network Weights & Models
 echo "[5/6] Verifying and downloading neural network weights..."
 .venv/bin/python3 scripts/download_models.py
+install -d -o "$CURRENT_USER" -g "$CURRENT_USER" "$PROJECT_ROOT/var"
 
 # 6. Systemd Background Appliance Service
 echo "[6/6] Configuring systemd background auto-start service..."

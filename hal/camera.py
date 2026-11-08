@@ -24,6 +24,10 @@ class BaseCameraSource(ABC):
         """Flag indicating whether the camera source is a synthetic generator."""
         return False
 
+    @property
+    def is_available(self) -> bool:
+        return True
+
     @abstractmethod
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """Read a single frame from the camera.
@@ -155,6 +159,10 @@ class OpenCVCameraSource(BaseCameraSource):
             return False, None
         return self.cap.read()
 
+    @property
+    def is_available(self) -> bool:
+        return bool(self.cap is not None and self.cap.isOpened())
+
     def release(self) -> None:
         if self.cap is not None:
             self.cap.release()
@@ -228,6 +236,10 @@ class V4L2CameraSource(BaseCameraSource):
             logger.debug("V4L2 read_frame exception: %s", e)
             return False, None
 
+    @property
+    def is_available(self) -> bool:
+        return self.is_open and self.proc is not None
+
     def release(self) -> None:
         self.is_open = False
         if self.proc is not None:
@@ -263,6 +275,62 @@ class V4L2CameraSource(BaseCameraSource):
             "height": self.height,
             "fps": self.fps,
             "is_open": self.is_open,
+        }
+
+
+class Picamera2CameraSource(BaseCameraSource):
+    """Raspberry Pi Camera Module source using the supported Picamera2 stack."""
+
+    def __init__(self, width: int = 640, height: int = 480, fps: int = 30) -> None:
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.picam = None
+        try:
+            from picamera2 import Picamera2
+
+            self.picam = Picamera2()
+            config = self.picam.create_video_configuration(
+                main={"size": (width, height), "format": "RGB888"},
+                controls={"FrameRate": float(fps)},
+            )
+            self.picam.configure(config)
+            self.picam.start()
+            logger.info("Picamera2 camera opened: %dx%d @ %d FPS.", width, height, fps)
+        except Exception as exc:
+            logger.warning("Picamera2/libcamera initialization failed: %s", exc)
+            self.picam = None
+
+    @property
+    def is_available(self) -> bool:
+        return self.picam is not None
+
+    def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        if self.picam is None:
+            return False, None
+        try:
+            rgb = self.picam.capture_array("main")
+            return True, rgb[:, :, ::-1].copy()  # runtime camera contract is BGR
+        except Exception as exc:
+            logger.warning("Picamera2 capture failed: %s", exc)
+            return False, None
+
+    def release(self) -> None:
+        if self.picam is not None:
+            try:
+                self.picam.stop()
+                self.picam.close()
+            except Exception:
+                pass
+            self.picam = None
+
+    def get_properties(self) -> Dict[str, Any]:
+        return {
+            "backend": "libcamera_picamera2",
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "is_open": self.is_available,
         }
 
 
@@ -333,8 +401,9 @@ def create_camera_source(
     height: int = 480,
     fps: int = 30,
     device_index: Optional[int] = None,
+    allow_synthetic_fallback: bool = True,
 ) -> BaseCameraSource:
-    """Instantiate camera driver with automatic graceful fallback to synthetic generator.
+    """Instantiate a camera; synthetic fallback is opt-in for simulation only.
 
     Args:
         device_index: Explicit OpenCV index. ``None`` probes 0..4 and prefers a
@@ -342,6 +411,13 @@ def create_camera_source(
     """
     if backend == "synthetic":
         return SyntheticCameraSource(width=width, height=height, fps=fps)
+
+    if backend == "libcamera":
+        camera = Picamera2CameraSource(width=width, height=height, fps=fps)
+        if camera.is_available:
+            return camera
+        if not allow_synthetic_fallback:
+            return camera
 
     # 1. Try OpenCV if explicitly requested or auto
     if backend in ("opencv", "auto"):
@@ -365,12 +441,14 @@ def create_camera_source(
         except Exception as e:
             logger.debug("V4L2 camera acquisition probe failed for %s: %s", device_path, e)
 
-    # 3. Graceful fallback to synthetic camera simulator
+    # 3. Explicit simulation fallback only
+    if not allow_synthetic_fallback:
+        logger.error("Physical camera backend [%s] is unavailable; refusing synthetic fallback.", backend)
+        return OpenCVCameraSource(device_index=-1, width=width, height=height, fps=fps)
+
     logger.warning(
         "Physical camera [%s] unavailable or yielded empty frames. "
-        "Engaging autonomous SyntheticCameraSource fallback per system resiliency spec.",
+        "Using explicitly permitted SyntheticCameraSource simulation fallback.",
         device_path,
     )
     return SyntheticCameraSource(width=width, height=height, fps=fps)
-
-

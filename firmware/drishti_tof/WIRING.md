@@ -7,6 +7,8 @@ Inputs: **2 momentary push buttons** to ground
 > The pin table below is the source of truth. Generated images often garble
 > labels — always verify against this table before applying power.
 
+> **Prototype only:** this wiring covers the current single-zone VL53L0X breadboard. It is not the wiring for the future multizone/downward redundant sensor architecture described in [`../../docs/INDUSTRY_ROADMAP.md`](../../docs/INDUSTRY_ROADMAP.md). Disconnect USB power before changing wiring, verify breakout voltage requirements, and do not use a breadboard assembly in human trials.
+
 ---
 
 ## 1. Bill of materials

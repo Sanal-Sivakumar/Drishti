@@ -47,6 +47,9 @@ models/*.bin
 models/**/*.bin
 models/*.pt
 models/*.safetensors
+models/**/*.safetensors
+# Downloaded Hugging Face model snapshots are provisioned, never committed.
+models/smolvlm2-500m/
 data/raw/
 data/recordings/*.wav
 data/snapshots/*.jpg
@@ -85,4 +88,3 @@ coverage.xml
 *.log
 logs/
 *.pid
-

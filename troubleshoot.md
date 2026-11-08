@@ -2,6 +2,8 @@
 
 This ledger documents known failure modes, root causes, reproducible diagnostics, and permanent fixes across both development workstations and target Raspberry Pi 5 edge hardware.
 
+Last reviewed: 2026-11-08. For current architecture, measured latency and the ordered backlog, also read [`docs/CURRENT_SYSTEM.md`](docs/CURRENT_SYSTEM.md), [`docs/LATENCY.md`](docs/LATENCY.md), and [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md).
+
 ---
 
 ## 1. Hardware & Physical Sensor Layer
@@ -24,7 +26,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 - **Fix**:
   1. Kill orphaned streaming processes: `kill -9 $(fuser /dev/video0 2>/dev/null)`
   2. For Raspberry Pi 5, verify physical orientation: the blue tape on the 15-pin FFC ribbon cable must face towards the Ethernet/USB ports. Ensure `dtoverlay=imx708` is loaded.
-  3. Drishti's Hardware Abstraction Layer (`hal/camera.py`) implements automatic fallback to mock/synthetic test video loops during headless validation.
+  3. Production mode reports `CAMERA_UNAVAILABLE` and suppresses navigation output. Synthetic fallback exists only in explicit simulation mode.
 ---
 
 ### 1.2 I2C Bus & VL53L1X ToF Sensor Failures
@@ -41,7 +43,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
   ```
 - **Fix**:
   1. If `0x29` does not appear, power cycle the 3.3V rail (Pin 1) or run an I2C clock unwedge sequence (toggling SCL 9 times to force the slave to release SDA).
-  2. Drishti's distance sensor driver (`hal/distance_sensor.py`) checks for hardware presence at initialization; if absent or disabled in dev mode, it switches cleanly to synthetic range simulation.
+  2. In production, an absent or stale distance sensor reports `RANGE_UNAVAILABLE`; it never substitutes synthetic range. Use `--hardware synthetic` only for labeled simulation.
 
 ---
 
@@ -120,9 +122,10 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
   chrt -p $(pgrep -f "drishti")
   ```
 - **Fix**:
-  1. Decouple audio generation into a dedicated high-priority daemon thread with a non-blocking queue (`queue.Queue(maxsize=16)`).
-  2. Set the audio processing chunk buffer size to $1024$ samples ($\sim 23 \text{ ms}$ at $44.1 \text{ kHz}$) to absorb jitter without introducing noticeable latency.
-  3. Drishti's spatial audio synthesizer uses pre-computed lookup tables for ITD/ILD convolution rather than on-the-fly filtering.
+  1. The current `ALSAAudioSink` already uses a non-blocking worker and a bounded queue of four items; when full, it drops the oldest queued item.
+  2. Measure enqueue-to-device-callback latency before changing buffer sizes. A larger buffer reduces underruns but increases warning latency.
+  3. The current synthesizer computes fractional delay/ITD/ILD waveforms in NumPy; it does not use a precomputed HRTF/ITD lookup table.
+  4. Critical preemption is still P0 work: urgent ToF output must explicitly use critical priority and flush/interrupt lower-priority speech and PCM.
 
 ---
 
@@ -145,6 +148,17 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 2.3 VLM narration arrives late or describes an old scene
+
+#### Symptom: narration takes several seconds, or a correct sentence no longer matches the live scene
+
+- **Current evidence:** one real laptop run took about 9.1 seconds. Raspberry Pi performance is not yet measured.
+- **Root cause:** SmolVLM2 runs asynchronously on a request-time frame/fact snapshot. The worker queue holds four tasks and currently has no task expiry, latest-only coalescing, or completion-time sensor revalidation.
+- **Safe response:** do not use narration for immediate navigation. Stop repeated button presses, continue relying on the normal mobility aid, and treat the VLM as optional context only.
+- **Required fix before trials:** implement timestamps/expiry, retain only the newest pending narration, recheck live hazards before speech, and cancel/duck narration for a critical cue. See [`docs/LATENCY.md`](docs/LATENCY.md).
+
+---
+
 ## 3. Deep Learning Runtime & Quantization
 
 ### 3.1 ONNX Runtime Execution Provider Mismatch
@@ -159,7 +173,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
   ```
 - **Fix**:
   1. Install `onnxruntime-gpu` and verify `CUDAExecutionProvider` is in the returned list.
-  2. Drishti's detector automatically negotiates the fastest available provider in order: `['HailoRTExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']`.
+  2. The current detector negotiates available ONNX Runtime providers in this order: `CUDAExecutionProvider`, then `CPUExecutionProvider`. Hailo/TensorRT support is not implemented in this repository.
 
 ---
 
@@ -170,7 +184,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
   Poor calibration dataset distribution during Post-Training Quantization (PTQ). If the calibration set does not capture varied indoor/outdoor luminance distributions, dynamic activation ranges are clipped, causing small obstacles to drop below the confidence threshold.
 - **Fix**:
   1. Use KL divergence calibration (Entropy calibration) rather than MinMax calibration for activations.
-  2. Maintain a minimum confidence threshold of $0.40$ for safety-critical obstacle classes (`person`, `chair`, `door`, `stairs`).
+  2. Re-select thresholds from the held-out wearable dataset with critical-hazard recall as the primary constraint. The current COCO model supports `person` and `chair`; it does not contain `door` or `stairs` labels.
 
 ---
 
@@ -287,7 +301,7 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 - **Root Cause**:
   1. Local Mosquitto broker daemon is not running on port 1883/8883.
   2. Firewall blocking MQTT port or incorrect broker IP address.
-  3. Drishti operates in offline-first mode: when the broker is unavailable, telemetry should buffer in RAM rather than crashing the pipeline.
+  3. Drishti operates in offline-first mode: when the broker is unavailable, telemetry uses a bounded persistent JSONL buffer (`var/telemetry-buffer.jsonl` by default), replays after reconnect, and retains QoS 1 records until PUBACK.
 - **Diagnostic Command**:
   ```bash
   # Check if Mosquitto broker service is active
@@ -351,12 +365,12 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
            +---> Camera stream black/empty?
            |        +---> Check: `fuser -v /dev/video0` -> kill zombie holders
            |        +---> Check: Camera Module 3 ribbon polarity -> blue tape to ports
-           |        +---> Fallback: Drishti synthetic test pattern
+           |        +---> Production: NOT READY; simulation: labeled test pattern
            |
            +---> Distance always reports 0 or timeout?
            |        +---> Check: `i2cdetect -y 1` -> verify address 0x29
            |        +---> Check: I2C wiring (SDA Pin 3, SCL Pin 5)
-           |        +---> Fallback: Drishti bounding-box geometric depth estimator
+           |        +---> Production: NOT READY; geometric priors are not physical ToF
            |
            +---> Audio stuttering or high latency?
            |        +---> Check: CPU core saturation -> isolate audio to dedicated core
@@ -419,7 +433,5 @@ All subsystems emit ISO-timestamped log records under the `drishti.*` namespace.
 
 ### 8.6 Headless Debug Browser Viewer
 - **Usage**: Add `--viewer` to any runner invocation (`python3 scripts/run_live_wearable.py --hardware laptop --viewer`).
-- **Endpoint**: Open `http://127.0.0.1:8080/` in Chrome/Firefox to view the live 30 FPS MJPEG stream with YOLO bounding boxes, class labels, metric 3D distances, and the ToF laser spot crosshair.
+- **Endpoint**: Open `http://127.0.0.1:8080/` in Chrome/Firefox to view the latest annotated MJPEG frames, YOLO boxes, labels, range source, and ToF spot. The configured 30 FPS is a target, not a measured viewer guarantee.
 - **Port Conflict**: Change the port via `--viewer-port 8081` if port 8080 is bound by another service.
-
-

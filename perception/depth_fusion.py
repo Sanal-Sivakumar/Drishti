@@ -14,6 +14,7 @@ class SpatialDepthFuser:
     def __init__(
         self,
         focal_length_px: float = 500.0,
+        focal_length_y_px: Optional[float] = None,
         principal_point_x: float = 320.0,
         principal_point_y: float = 240.0,
         tof_cone_half_angle_deg: float = 13.5,
@@ -21,9 +22,11 @@ class SpatialDepthFuser:
         tof_baseline_x_m: float = 0.0,
         tof_baseline_y_m: float = 0.0,
         tof_hit_margin_px: float = 8.0,
+        min_distance_m: float = 0.05,
+        max_distance_m: float = 4.0,
     ) -> None:
         self.fx = focal_length_px
-        self.fy = focal_length_px
+        self.fy = float(focal_length_y_px if focal_length_y_px is not None else focal_length_px)
         self.cx = principal_point_x
         self.cy = principal_point_y
         self.cone_half_angle_rad = np.radians(tof_cone_half_angle_deg)
@@ -33,6 +36,8 @@ class SpatialDepthFuser:
         self.tof_baseline_x_m = float(tof_baseline_x_m)
         self.tof_baseline_y_m = float(tof_baseline_y_m)
         self.tof_hit_margin_px = float(tof_hit_margin_px)
+        self.min_distance_m = float(min_distance_m)
+        self.max_distance_m = float(max_distance_m)
         self.class_priors = class_priors_m or {
             "person": 1.70,
             "chair": 0.85,
@@ -158,7 +163,11 @@ class SpatialDepthFuser:
         geom_distance = float(np.clip(geom_distance, 0.3, 10.0))
 
         # Determine metric distance
-        if (in_cone or force_tof) and tof_distance_m is not None and tof_distance_m > 0:
+        valid_tof = (
+            tof_distance_m is not None
+            and self.min_distance_m <= tof_distance_m <= self.max_distance_m
+        )
+        if (in_cone or force_tof) and valid_tof:
             metric_distance = tof_distance_m
             fusion_source = "tof_laser_fusion"
         else:

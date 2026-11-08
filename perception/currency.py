@@ -57,8 +57,13 @@ class IndianCurrencyRecognizer:
         },
     }
 
-    def __init__(self, confidence_threshold: float = 0.70) -> None:
+    def __init__(
+        self,
+        confidence_threshold: float = 0.70,
+        supported_denominations: Optional[list[int]] = None,
+    ) -> None:
         self.conf_thresh = confidence_threshold
+        self.supported_denominations = set(supported_denominations or self.NOTE_PROFILES)
 
     @staticmethod
     def bgr_to_hsv_fast(image: np.ndarray, color_order: str = "BGR") -> np.ndarray:
@@ -211,6 +216,8 @@ class IndianCurrencyRecognizer:
         best_confidence = 0.0
 
         for denom, profile in self.NOTE_PROFILES.items():
+            if denom not in self.supported_denominations:
+                continue
             ref_hue = profile["hue_center_deg"]
             hue_tol = profile.get("hue_tolerance", 16.0)
             # Circular angular difference on 360-degree color wheel
@@ -324,5 +331,4 @@ class IndianCurrencyRecognizer:
         # distinguished from a coloured wall/shirt, and was the main source of
         # false positives. Ask the user to hold the note 20-30 cm away instead.
         return {"denomination": None, "spoken_name": "No note detected", "confidence": 0.0}
-
 

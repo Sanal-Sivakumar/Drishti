@@ -38,14 +38,14 @@ def test_pipeline_continuous_steps(master_pipeline):
 
 
 def test_pipeline_button1_scene_narration(master_pipeline):
-    """Verify tactile Button 1 triggers on-demand VLM scene narration and speech."""
+    """Verify narration is queued away from the real-time step."""
     # Inject user pressing Button 1 (Scene Narration)
     master_pipeline.trigger_input.inject_trigger(button_id=1)
 
     result = master_pipeline.step()
-    assert result.get("event") == "SCENE_NARRATION_TRIGGERED"
-    assert "narration" in result
-    assert len(result["narration"]) > 0
+    assert result["events"] == [{"type": "SCENE_NARRATION_TRIGGERED", "queued": True}]
+    completed = master_pipeline.wait_for_cognition()
+    assert completed and completed[0]["narration"]
 
     # Ensure caregiver telemetry alert was queued
     alerts = [
@@ -61,8 +61,9 @@ def test_pipeline_button2_reading_or_currency(master_pipeline):
     master_pipeline.trigger_input.inject_trigger(button_id=2)
 
     result = master_pipeline.step()
-    assert result.get("event") == "READING_OR_CURRENCY_TRIGGERED"
-    assert ("currency" in result) or ("ocr" in result)
+    assert result["events"] == [{"type": "READING_OR_CURRENCY_TRIGGERED", "queued": True}]
+    completed = master_pipeline.wait_for_cognition()
+    assert completed and (("currency" in completed[0]) or ("ocr" in completed[0]))
 
 
 def test_pipeline_run_loop(master_pipeline):
@@ -96,5 +97,4 @@ def test_pipeline_continuous_currency_mode():
     # Verify that continuous currency evaluated
     assert pipeline.continuous_currency is True
     pipeline.shutdown()
-
 

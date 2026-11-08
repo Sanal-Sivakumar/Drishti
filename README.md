@@ -1,406 +1,156 @@
-# Drishti – Assistive Scene Narrator
+# Drishti
 
-> **An offline-first, low-latency assistive wearable architecture engineered for visually impaired individuals, delivering real-time spatial awareness, multilingual reading, currency identification, and contextual scene narration on edge hardware.**
+Drishti is an experimental, offline-first assistive-perception prototype for Raspberry Pi 5 and Linux development machines. It combines a camera, a physical Time-of-Flight (ToF) range sensor, COCO object detection, spatial audio, OCR, banknote heuristics, and optional MQTT telemetry.
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![CI Pipeline](https://github.com/Sanal-Sivakumar/Drishti/actions/workflows/ci.yml/badge.svg)](https://github.com/Sanal-Sivakumar/Drishti/actions/workflows/ci.yml)
-[![Target Platform](https://img.shields.io/badge/Hardware-Raspberry%20Pi%205-red.svg)](https://www.raspberrypi.com/products/raspberry-pi-5/)
-[![AI Accelerator](https://img.shields.io/badge/NPU-Hailo--8L%20(13%20TOPS)-brightgreen.svg)](https://www.raspberrypi.com/products/raspberry-pi-ai-kit/)
-[![Offline Capability](https://img.shields.io/badge/Compute-100%25%20Offline-success.svg)](#1-core-philosophy--what-drishti-does)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
----
+> **Safety status:** research prototype. Do not use for unsupervised navigation, road crossing, drop-off detection, or as a replacement for a cane, guide dog, trained assistant, or orientation-and-mobility instruction. Begin only supervised indoor trials after the readiness checks below pass. Outdoor and unsupervised use is currently unsafe.
 
-## 1. Project Overview: What Drishti Does
+## Documentation map
 
-For over 285 million visually impaired individuals worldwide, independent navigation through dynamic, unstructured environments presents significant hazards. Traditional mobility aids like white canes detect only immediate physical obstacles at ground level (within 1–1.5 meters), leaving users vulnerable to overhead obstructions, moving obstacles (pedestrians, vehicles), unrecognized currency, and unreadable signage or printed documents. Cloud-reliant smart glasses frequently fail in real-world scenarios due to cellular latency spikes, dead zones, and privacy concerns.
+- [How the system works today](docs/CURRENT_SYSTEM.md)
+- [Laptop + hardware + Git/AI continuation workflow](docs/LAPTOP_WORKFLOW.md)
+- [Latency measurements and optimization plan](docs/LATENCY.md)
+- [Industry/product architecture roadmap](docs/INDUSTRY_ROADMAP.md)
+- [Ordered next steps and gates](docs/NEXT_STEPS.md)
+- [Full documentation index](docs/README.md)
 
-**Drishti** (meaning *vision* in Sanskrit) is an offline-first wearable edge-AI platform that acts as a continuous sensory surrogate. Mounted unobtrusively on a chest harness, cap, or glasses frame, Drishti pairs real-time optical sensing with Time-of-Flight (ToF) laser ranging, processing every perception stream entirely on-device (Raspberry Pi 5 with optional Hailo-8L NPU, or Ubuntu Linux workstations during development).
+## Status at this commit
 
-### Complete Feature Set
+The software architecture and local VLM path are implemented, and 105 automated tests pass. A real SmolVLM2 smoke run on the development laptop produced grounded JSON in about 9.1 seconds. That latency is acceptable only for optional on-demand context, not navigation.
 
-1. **Sub-100ms Real-Time Obstacle Avoidance & 3D Binaural Soundscape**:
-   - Detects pedestrians, doors, stairs, chairs, vehicles, and drop-offs at 30 FPS.
-   - Combines 2D visual bounding boxes with 1D/multi-zone Time-of-Flight infrared laser ranging to accurately pinpoint metric distance ($0.1 \text{ m}$ to $4.0 \text{ m}$) and 3D angle.
-   - Emits non-verbal binaural acoustic cues through bone-conduction headphones using Interaural Time Difference (ITD) and Interaural Level Difference (ILD), allowing the user to naturally "hear" where obstacles are in 3D space without blocking their natural ambient hearing.
+A fresh Git checkout is **not production-ready**: model weights are intentionally not committed, geometry and audio profiles are uncalibrated, no wearable hazard dataset/model has been validated, and no real sensor-to-ear latency distribution has been recorded. Critical audio preemption and stale-narration revalidation remain P0 work; see [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md).
 
-2. **Instant Indian Rupee (INR) Banknote Identification**:
-   - Real-time classification of Indian currency notes (₹10, ₹20, ₹50, ₹100, ₹200, ₹500).
-   - Operates under varied lighting, folds, creases, and partial orientations, providing instant spoken denomination verification ("One hundred rupees") to prevent financial exploitation.
+## How it works, briefly
 
-3. **Multilingual Indic Optical Character Recognition (OCR)**:
-   - On-demand extraction and vocalization of printed text from medicine strips, grocery packaging, street boards, and documents.
-   - Native support for **English**, **Hindi (हिन्दी)**, **Tamil (தமிழ்)**, and **Malayalam (മലയാളം)** with accurate Unicode NFC grapheme cluster processing.
+The fast loop reads the physical camera and ToF sensor, runs YOLO, fuses a range with calibrated image geometry, and emits a horizontal stereo cue. A close ToF measurement bypasses YOLO and the VLM. Button-triggered OCR/currency/narration work runs in a separate bounded worker. SmolVLM2 receives the image plus confirmed sensor facts; its strict JSON is spoken only when it agrees with those facts.
 
-4. **Contextual Scene Narration via On-Device Vision-Language Models (VLM)**:
-   - Triggered via a tactile button push or voice keyword.
-   - Compact quantized Vision-Language Models (SmolVLM / Moondream2) analyze the full visual scene and generate concise, 2-sentence navigational summaries focusing on spatial relationships, room layout, and navigational hazards (e.g., *"There is a clear path straight ahead. A closed wooden door is located 3 meters to your right."*).
+The VLM is explanatory. It never decides immediate hazard output. A single ToF ray and COCO detector also cannot establish a generally safe or traversable path.
 
-5. **Local Privacy-Preserving Telemetry & Caregiver Companion App**:
-   - Zero biometric leakage: all camera frames remain local.
-   - In emergency situations (SOS button trigger or persistent obstacle collision warning), an on-device face-redaction filter irreversibly blurs detected human faces and license plates before transmitting an opt-in snapshot and GPS telemetry to a caregiver dashboard via Mosquitto MQTT over TLS.
+## What is implemented
 
----
+- A production readiness state (`ready`, `degraded`, `not_ready`) and a separately labeled `simulation` state.
+- Fail-closed navigation: a missing camera, stale/unavailable physical range sensor, or missing/invalid YOLO ONNX model produces `path_state: unknown`; it cannot produce “path clear.” Synthetic range is never represented as physical ToF.
+- YOLOv8-style ONNX preprocessing with BGR-to-RGB conversion, letterboxing, input/output contract checks, NMS, COCO class validation, and calibrated-FOV intrinsics.
+- Camera/ToF fusion and binaural obstacle pings. A shared audio priority arbiter prevents routine pings from overlapping spoken cognition.
+- A bounded worker queue for OCR, banknote recognition, and scene narration so those tasks do not block perception.
+- Real local SmolVLM2-500M image inference for on-demand scene description. Its deterministic JSON output is checked against confirmed YOLO/ToF facts before speech; rejected output is never spoken.
+- Local Haar-cascade face detection, detector-assisted person-region redaction, and Gaussian blur. This is best-effort and is not a privacy guarantee; false negatives are possible.
+- MQTT telemetry with real host sensor readings when available, `null` when unavailable, TLS certificate verification, environment-provided credentials, a bounded persistent buffer, reconnect replay, and QoS 1 PUBACK tracking.
+- Picamera2, OpenCV, V4L2, VL53L1X, and ESP32 serial backends, plus explicitly labeled synthetic backends for tests.
 
-## 2. System Architecture
+## Required production readiness
 
-Drishti divides sensory processing into a **Fast Perception Stream** (continuous, sub-100ms, non-verbal spatial cues) and an **On-Demand Cognitive Stream** (event-driven, natural language narration). This separation prevents cognitive auditory fatigue while guaranteeing rapid physical hazard notification.
+Production navigation is authoritative only when all of these are true:
 
-```
-                      +-----------------------------------+
-                      |      Physical Input Devices       |
-                      |  - CSI Camera Module 3 (60/30 FPS)|
-                      |  - VL53L1X ToF Sensor (I2C)       |
-                      |  - Tactile Push Buttons (GPIO)    |
-                      |  - USB/MEMS Microphone            |
-                      +-----------------+-----------------+
-                                        |
-       +--------------------------------+--------------------------------+
-       |                                                                 |
-       v [Continuous Fast Stream: 30 FPS]                                v [On-Demand Tactile Trigger]
-+------------------------------------+                         +------------------------------------+
-|       Fast Perception Engine       |                         |    On-Demand Cognitive Engine      |
-| - Preprocessing & Letterboxing     |                         | - Scene Snapshot Freezing          |
-| - YOLO Nano (INT8 TensorRT/ONNX)   |                         | - Multilingual Indic OCR           |
-| - Bounding Box Raycasting          |                         |   (English, Hindi, Tamil, Mal)     |
-| - Conical ToF Depth Fusion         |                         | - Banknote Classifier (INR)        |
-| - 3D Obstacle Metric Vectorizer    |                         | - Visual Language Model (VLM)      |
-| - Binaural Synthesizer (ITD/ILD)   |                         |   (SmolVLM / Moondream2)           |
-+-----------------+------------------+                         +-----------------+------------------+
-                  |                                                              |
-                  | (Sub-100ms Spatial Tones)                                    | (Synthesized Speech)
-                  +--------------------------------+-----------------------------+
-                                                   |
-                                                   v
-                                 +------------------------------------+
-                                 |    Unified Audio Synthesis Hub     |
-                                 | - Non-blocking Audio Mixer (ALSA)  |
-                                 | - Priority Preemption Arbiter      |
-                                 | - Binaural 3D Spatial Sound Cues   |
-                                 | - Local Neural TTS (Piper/MMS)     |
-                                 +-----------------+------------------+
-                                                   |
-                                                   v
-                                      [ Bone Conduction Headset ]
+1. A physical camera is open and returning BGR frames.
+2. `models/yolov8n.onnx` loads and satisfies the expected NCHW/model-output contract.
+3. A physical ToF source is present and fresh; synthetic or stale range makes the system not ready.
+4. Target classes exist in the model’s COCO label set. The current configuration covers `person`, `chair`, `dining table` (configured as `table`), `car`, and `bicycle`. Doors, stairs, drop-offs, and overhead clearance are not detected by the current model.
+5. Camera horizontal FOV and ToF alignment have been measured on the assembled device, and `calibration_verified` is set to `true` with the calibration record retained.
 
-                                                   : (Opt-in Emergency Event)
-                                                   v
-                                 +------------------------------------+
-                                 | Privacy Mask & Telemetry Broadcast |
-                                 | - Face & PII Gaussian Redaction    |
-                                 | - Mosquitto MQTT Client (TLS/QoS1) |
-                                 | - Flutter Companion App Dashboard  |
-                                 +------------------------------------+
-```
+The console, heartbeat, and `/metrics` endpoint expose readiness and `path_state`. A production result with unavailable perception is `unknown`, never `clear`.
 
----
+## Installation and model provisioning
 
-## 3. Real-World User Workflows
-
-```
-Scenario A: Daily Walking Navigation
-User Walks Forward ──► YOLO + ToF detects chair 1.5m to the left ──► Left ear receives 650Hz clicks ──► User adjusts heading right smoothly.
-
-Scenario B: Cash Payment / Currency Verification
-User holds note in front of camera ──► Presses Tactile Button 2 ──► Classifier verifies note ──► Audio: "Five hundred rupees".
-
-Scenario C: Reading Multilingual Signboard or Prescription
-User points camera at document ──► Long-presses Button 2 ──► Indic OCR scans script ──► Audio: "നീല ഡ്രഗ് സ്റ്റോർ (Neela Drug Store)".
-
-Scenario D: Unfamiliar Environment Scene Narration
-User enters a new lobby ──► Presses Tactile Button 1 ──► VLM evaluates scene snapshot ──► Audio: "You are in an open hallway. Reception desk is 4 meters ahead on your left."
-```
-
----
-
-## 4. Hardware Specifications & Raspberry Pi 5 Wiring
-
-| Component | Hardware Specification | Interface / Pin | Pin Number (Pi Header) | Electrical Specs | Functional Role |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Wide Camera** | Raspberry Pi Camera Module 3 | MIPI CSI-2 (15-pin FFC) | Dedicated CAM port | 3.3V, Sony IMX708 sensor, 120° Wide FoV | Real-time scene capture |
-| **ToF Range Sensor** | STMicroelectronics VL53L1X | I2C Bus 1 | Pins 1, 3, 5, 6 | 3.3V DC, 400 kHz Fast Mode, 940nm VCSEL | True metric range ($0.04\text{m} - 4.0\text{m}$) |
-| **ToF Power (VIN)** | 3.3V DC Rail | DC Power | Pin 1 | 3.3V ($\le 20 \text{ mA}$) | Sensor logic power |
-| **ToF Ground (GND)**| Ground | Power Ground | Pin 6 | 0V Reference | Common electrical ground |
-| **ToF SCL** | I2C Clock | GPIO 3 / SCL | Pin 5 | 3.3V Open-drain, internal pull-up | Serial clock line |
-| **ToF SDA** | I2C Data | GPIO 2 / SDA | Pin 3 | 3.3V Open-drain, internal pull-up | Serial bidirectional data |
-| **Tactile Button 1**| Momentary Push Button | Digital GPIO | Pin 11 (GPIO 17) | Internal pull-up to 3.3V, active low | Trigger Scene Narration (VLM) |
-| **Tactile Button 2**| Momentary Push Button | Digital GPIO | Pin 13 (GPIO 27) | Internal pull-up to 3.3V, active low | Trigger Banknote / Multilingual OCR |
-| **Audio Headset** | Open-Ear Bone Conduction | USB / Bluetooth 5.0 | USB Port or BLE | Stereo 44.1/48 kHz PCM | Spatial audio & speech output |
-| **AI Accelerator** | Raspberry Pi AI Kit (Hailo-8L) | M.2 PCIe Gen 2/3 | PCIe HAT+ connector | 13 TOPS INT8 compute, 2.5W typical | Sub-15ms neural model inference |
-
----
-
-## 5. Repository Structure
-
-```
-Drishti/
-├── .gitignore                # Comprehensive ignore rules for edge AI, models, logs
-├── LICENSE                   # GNU General Public License v3.0 (GPL-3.0)
-├── README.md                 # Project overview, capabilities, pinout, quickstart (this file)
-├── TEAM_HANDOVER.md          # Contributor standards, latency budgets, headless testing rules
-├── technical_details.md      # Beginner-to-advanced first-principles theory & math derivations
-├── troubleshoot.md           # Operational failure modes, diagnostics, and permanent fixes
-├── pyproject.toml            # Project packaging metadata, Ruff, Mypy, and Pytest configuration
-├── config/                   # Hardware, logging, and pipeline configuration schemas
-│   ├── config_loader.py      # Centralized YAML configuration loader with schema validation
-│   ├── logging_config.py     # Centralized structured logging for field debugging
-│   ├── hardware_dev.yaml     # Workstation webcam and synthetic sensor setup
-│   ├── hardware_pi5.yaml     # Raspberry Pi 5 pinout, I2C bus, CSI configs
-│   └── pipeline_config.yaml  # Detection thresholds, audio frequencies, priority rules
-├── hal/                      # Hardware Abstraction Layer (Drivers & Synthetic Mocks)
-│   ├── camera.py             # Abstract camera (V4L2, OpenCV, Synthetic with fallback)
-│   ├── distance_sensor.py    # Abstract range sensor (VL53L1X I2C, Synthetic Sim)
-│   ├── trigger_input.py      # Abstract tactile button (GPIO pull-up, Synthetic Event)
-│   └── audio_output.py       # Abstract audio sink (ALSA persistent thread, Headless buffer)
-├── models/                   # Neural weights directory
-│   └── yolov8n.onnx          # Official YOLOv8n ONNX 80-class COCO obstacle detector
-├── perception/               # Fast Perception Subsystem
-│   ├── detector.py           # Real ONNX YOLOv8 obstacle detector with NMS
-│   ├── depth_fusion.py       # 2D bounding box to 3D spatial ray-cone depth fusion
-│   ├── currency.py           # BGR Indian currency note recognizer with edge gating
-│   └── spatial_audio.py      # Binaural acoustic synthesizer (ITD + ILD + PRF + Fractional Delay)
-├── cognitive/                # On-Demand Semantic Subsystem
-│   ├── ocr_engine.py         # Multilingual Indic OCR (Eng, Hin, Tam, Mal via pytesseract)
-│   ├── vlm_narrator.py       # Multimodal spatial scene describer & ONNX VLM runner
-│   └── speech_service.py     # Speech synthesis with direct HAL audio sink routing
-├── safety/                   # Privacy Masking & Telemetry
-│   ├── anonymizer.py         # Vectorized Gaussian face & head redaction filter (cv2 / scipy)
-│   └── telemetry.py          # Mosquitto MQTT client (TLS 1.3, QoS 1, paho v2)
-├── scripts/                  # Autonomous deployment & demonstration runners
-│   ├── check_hardware_health.py # Non-destructive hardware diagnostics & health probe
-│   ├── download_models.py    # Neural model download & SHA-256 integrity verification
-│   ├── run_live_wearable.py  # Production continuous live wearable runner
-│   └── run_phase*.py         # Subsystem demonstration harnesses
-├── pipeline.py               # Master headless pipeline orchestrator
-├── requirements.txt          # Python runtime dependencies
-└── tests/                    # Headless automated unit and integration tests
-    ├── unit/                 # Subsystem unit tests with synthetic mocks
-    └── integration/          # End-to-end headless pipeline tests
-```
-
----
-
-## 6. Comprehensive Documentation Index
-
-All core documentation files reside directly in the root directory:
-
-| Document | Purpose & Target Audience |
-| :--- | :--- |
-| 📖 **[technical_details.md](technical_details.md)** | **Deep-Dive Theory & Mathematics**: Written from first principles so that anyone with zero prior knowledge can master: pinhole camera projection, Brown-Conrady lens distortion, Time-of-Flight photon physics, ray-cone metric fusion, INT8 affine quantization math, Roofline compute models, binaural ITD/ILD psychoacoustics, DBNet binarization, CTC loss for Indic scripts, and Transformer VLM architectures. |
-| 🛠️ **[troubleshoot.md](troubleshoot.md)** | **Diagnostic & Recovery Ledger**: Step-by-step diagnostic trees, commands, root cause analyses, and verified fixes for CSI-2 camera busy errors, I2C bus lockup and recovery, ALSA audio buffer underruns (`xrun`), ONNX runtime provider fallbacks, and Raspberry Pi 5 voltage/thermal throttling. |
-| 🤝 **[TEAM_HANDOVER.md](TEAM_HANDOVER.md)** | **Contributor Guide & Standards**: Onboarding protocols, git branching and conventional commit standards, headless test execution rules, and strict quantitative latency budgets ($\le 20 \text{ ms}$ PC, $\le 80 \text{ ms}$ Pi 5). |
-
----
-
-## 7. Quickstart & Headless Verification
-
-### 1. Prerequisites
-- **Operating System**: Ubuntu Linux 22.04 / 24.04 LTS (x86_64 or ARM64) or Raspberry Pi OS Lite 64-bit (Debian Bookworm).
-- **Python**: Version 3.10, 3.11, or 3.12 (recommended).
-- **System Packages**:
-  ```bash
-  sudo apt-get update && sudo apt-get install -y \
-      build-essential git libasound2-dev libportaudio2 \
-      i2c-tools tesseract-ocr tesseract-ocr-hin tesseract-ocr-tam tesseract-ocr-mal \
-      mosquitto mosquitto-clients
-  ```
-
-### 2. Installation
 ```bash
-# Clone the repository
-git clone https://github.com/Sanal-Sivakumar/Drishti.git
-cd Drishti
-
-# Set up isolated virtual environment
 python3 -m venv .venv
-source .venv/bin/activate
-
-# Upgrade packaging tools and install requirements
-pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-
-# Download official neural model weights with SHA-256 integrity verification
-python3 scripts/download_models.py
-
-# Run non-destructive hardware peripheral diagnostics
-python3 scripts/check_hardware_health.py
+. .venv/bin/activate
+python -m pip install -e '.[dev,vlm]'
+python scripts/download_models.py
+python -m pytest tests -q
 ```
 
-### 3. Running Headless Verification Tests
-The entire test suite runs completely headless without requiring physical cameras, I2C sensors, audio output hardware, or GUI display servers:
+On Raspberry Pi OS Bookworm:
 
 ```bash
-# Run complete test suite (92 unit and integration tests)
-pytest tests/ -v
-```
-
-### 4. Interactive ToF Distance Monitoring & Zero-Offset Calibration
-When physical hardware is connected, you can inspect the live Time-of-Flight sensor in real time and calibrate out systematic optical offsets:
-
-```bash
-# Real-time interactive ASCII distance gauge & health monitor
-python3 scripts/monitor_tof.py
-
-# Probe sensor link and test tactile push buttons (10 seconds)
-python3 scripts/probe_esp32.py --duration 10
-
-# Run interactive zero-offset calibration and persist to hardware_dev.yaml
-python3 scripts/calibrate_tof.py --distance-mm 500 --samples 100 --save
-```
-
-### 5. Running the Live Fast Perception Pipeline
-You can run the end-to-end fast perception loop either with synthetic simulation or on physical hardware:
-
-```bash
-# Option A: Headless Synthetic Benchmark (Zero hardware dependencies)
-python3 scripts/run_phase1_perception.py --frames 10 --benchmark-frames 50
-
-# Option B: Real Laptop Hardware (Webcam /dev/video0 + Speakers plughw:1,0)
-python3 scripts/run_phase1_perception.py --camera real --audio real --frames 10
-```
-
-### 6. Running On-Demand Multilingual OCR & VLM Scene Narration
-Trigger the on-demand cognitive stream to extract Indic text, narrate the scene, and vocalize speech:
-
-```bash
-# Synthetic test mode
-python3 scripts/run_phase2_cognitive.py --camera synthetic
-
-# Real laptop webcam snapshot with audible speech synthesis
-python3 scripts/run_phase2_cognitive.py --camera real --speak
-```
-
-### 7. Running Master Full-System Orchestrator (Phase 3)
-Execute all subsystems concurrently (fast 3D perception, tactile triggers, Gaussian face redaction, and caregiver telemetry):
-
-```bash
-# Option A: Headless Simulation Mode (Zero hardware required)
-python3 scripts/run_phase3_full_system.py --camera synthetic
-
-# Option B: Live Wearable Mode (Laptop /dev/video0 + plughw:1,0 Audio Sink)
-python3 scripts/run_phase3_full_system.py --camera real --audio real
-```
-
-### 7. Running Production Autonomous Wearable (Continuous Live Mode)
-Runs continuously with active 3D spatial obstacle sonification, automatic banknote detection, and live interactive controls:
-
-```bash
-# On Laptop (webcam, ESP32 DevKit V1 + VL53L0X over serial, optional browser debug viewer)
-python3 scripts/run_live_wearable.py --hardware laptop --viewer
-
-# On Laptop with virtual ESP32 PTY emulator (no physical MCU needed)
-python3 tools/fake_esp32.py --link /tmp/drishti-tof &
-python3 scripts/run_live_wearable.py --hardware laptop --serial-port /tmp/drishti-tof --viewer
-
-# On Raspberry Pi (Camera Module 3 / USB webcam, ESP32 or VL53L1X, GPIO buttons)
-python3 scripts/run_live_wearable.py --hardware rpi
-```
-
-#### Interactive Controls & Debug Viewer:
-- **Debug Browser Viewer**: Open `http://127.0.0.1:8080/` in your browser to inspect real-time video frames with YOLO bounding boxes, class labels, metric 3D distances, and the ToF laser spot crosshair.
-- **Button 2 or `C` + Enter**: Triggers opt-in Indian Rupee banknote classification or Indic OCR reading.
-- **Button 1 or `N` + Enter**: Triggers local VLM scene narration of what lies ahead.
-- **`Q` + Enter** (or `Ctrl+C`): Gracefully powers down the wearable system.
-
-#### Raspberry Pi Automated Provisioning & Boot Deployment:
-To provision a fresh Raspberry Pi OS 64-bit install with all system packages, udev rules (`/dev/drishti-tof`), models, and background services in one command:
-
-```bash
-# Automated single-command provisioning
 sudo bash scripts/setup_raspberry_pi.sh
-
-# Or manage the background service manually
-systemctl status drishti.service
-journalctl -u drishti.service -f
 ```
 
----
+The provisioning script installs Picamera2 through APT, creates a system-site-packages virtual environment, installs the Pi ToF dependency, verifies YOLO weights and the Piper voice, and installs the systemd unit. Put broker secrets in `/etc/drishti/drishti.env`:
 
-## 8. Implementation Progress & Engineering Milestones
-
-| Phase | Milestone Description | Status | Verification Checkpoint |
-| :--- | :--- | :--- | :--- |
-| **Phase 0** | **Foundations & Hardware Abstraction Layer (HAL)**<br>- Abstract drivers for Camera, ToF, Push Button GPIO, and Audio Sink<br>- ESP32 DevKit V1 serial link (`hal/esp32_link.py`) and PTY emulator (`tools/fake_esp32.py`)<br>- Bluetooth A2DP audio routing and profile recovery (`hal/audio_route.py`) | ✅ **Completed** | **Checkpoint 0**: All HAL drivers verified via `test_hal.py`, `test_esp32_link.py`, `test_audio_route.py`. |
-| **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer with sub-sample fractional delay (`np.interp`)<br>- Parallax-aware camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier with anisotropy and contour solidity gating<br>- V4L2/OpenCV live webcam streaming and ALSA/PipeWire direct speaker output | ✅ **Completed** | **Checkpoint 1**: Verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
-| **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Offline Piper neural TTS (`en_US-lessac-medium`) with non-blocking async queue and system fallbacks | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
-| **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Adaptive YOLO ONNX denormalization for live bounding boxes | ✅ **Completed** | **Checkpoint 3**: 88/88 tests passing, verified across full pytest suite. |
-| **Phase 4** | **Physical Hardware Assembly, Zero-Offset Calibration & Edge Deployment**<br>- ESP32 DevKit V1 firmware flashing and breadboard verification (`drishti_tof.ino`)<br>- ST VL53L0X Long-Range profile (33 ms budget, 0.1 MCPS rate limit, auto-interrupt recovery)<br>- Optical zero-offset ToF wall calibration (`scripts/calibrate_tof.py`)<br>- Real-time interactive ToF distance monitor CLI (`scripts/monitor_tof.py`)<br>- Automated Raspberry Pi 5 appliance setup (`scripts/setup_raspberry_pi.sh`)<br>- Systemd background service deployment (`config/drishti.service`) | ✅ **Completed** | **Checkpoint 4**: Hardware probe verified live on physical link @ 32.6 Hz, 0.0% packet errors, 92/92 tests passing. |
-| **Phase 5** | **Field Optimization & External Software Interfacing**<br>- Hailo-8L NPU pipeline acceleration<br>- ROS2 / external robotics and assistive software bridge integration<br>- Field navigation trials with visually impaired participants | 🔄 **Active / In Progress** | **Checkpoint 5**: Multi-software synchronization, zero-latency ROS2 message bridge, and outdoor navigation. |
-
----
-
-## 9. External Software Integration & Inter-Process Tuning
-
-Drishti is designed as an open, decoupled perception engine that can easily be tuned, driven, or consumed by external software (such as ROS2 navigation nodes, assistive companion apps, custom robot controllers, or headless telemetry aggregators).
-
-### 9.1 In-Process Python Perception API
-Another Python process or framework can import and execute the fast perception pipeline directly:
-
-```python
-import cv2
-from perception.pipeline_fast import FastPerceptionPipeline
-from config.config_loader import load_pipeline_config
-
-# Initialize pipeline with configuration schema
-cfg = load_pipeline_config("config/pipeline_config.yaml")
-pipeline = FastPerceptionPipeline(config=cfg)
-
-# Pass any BGR numpy frame (e.g. from ROS sensor_msgs/Image or another camera)
-frame = cv2.imread("scene.jpg")
-result = pipeline.process_frame(frame, current_distance_m=1.25)
-
-# Extract 3D obstacle vectors, class labels, and audio cues
-for obstacle in result.obstacles:
-    print(f"Detected: {obstacle.label} ({obstacle.confidence:.2f})")
-    print(f"  3D Coordinates: X={obstacle.x_m:.2f}m, Y={obstacle.y_m:.2f}m, Z={obstacle.z_m:.2f}m")
-    print(f"  Is Fused with Laser: {obstacle.is_laser_fused}")
-
-# Synthesized stereo audio buffer (44.1 kHz float32)
-audio_stereo = result.binaural_audio
+```text
+DRISHTI_MQTT_USERNAME=wearable-device
+DRISHTI_MQTT_PASSWORD=replace-with-a-secret
 ```
 
-### 9.2 USB Serial Hardware Telemetry Protocol
-The ESP32 sensor MCU streams deterministic ASCII CSV frames over USB serial at **921600 baud (8N1)**. External processes (e.g., a ROS2 serial driver, micro-ROS, or a C++ daemon) can connect directly to `/dev/ttyUSB0` or `/dev/drishti-tof`:
+## Running
 
-```
-MCU -> Host:
-  D,<seq>,<t_ms>,<mm_filtered>,<mm_raw>,<status>,<button_mask>   # ~30 Hz Range & Button State
-  B,<button_id>,<t_ms>,<edge>                                    # Button Event (1=press, 0=release)
-  S,<hz>,<invalid_pct>,<i2c_ok>,<link_ok>                         # 1 Hz Health Diagnostics
-  I,<firmware_version>,<sensor_model>                            # Boot Announcement
+Explicit simulation, safe for development:
 
-Host -> MCU:
-  V\n   # Request firmware banner
-  P\n   # 500 ms heartbeat
-  R\n   # Soft reset MCU
+```bash
+python scripts/run_live_wearable.py --hardware synthetic --max-cycles 100
 ```
 
-### 9.3 MQTT Telemetry & Caregiver Event Bus
-Drishti publishes structured, privacy-redacted JSON telemetry to a Mosquitto MQTT broker (`localhost:1883` or TLS `8883`):
+Physical Raspberry Pi stack:
 
-| MQTT Topic | Payload Schema | Purpose |
-| :--- | :--- | :--- |
-| `drishti/telemetry/heartbeat` | `{"seq": int, "fps": float, "hazard_dist_m": float, "system_health": str}` | 1 Hz periodic health broadcast |
-| `drishti/telemetry/events` | `{"event_type": str, "label": str, "timestamp": float, "metadata": dict}` | Button clicks, currency matches, OCR text |
-| `drishti/telemetry/alerts` | `{"alert_level": "WARNING"|"CRITICAL", "hazard": str, "distance_m": float}` | Immediate obstacle proximity warning |
+```bash
+python scripts/check_hardware_health.py
+python scripts/run_live_wearable.py --hardware rpi --viewer
+```
 
-### 9.4 Web Viewer & HTTP Streaming Endpoints
-When launched with `--viewer`, Drishti hosts a lightweight, zero-dependency HTTP server on port `8080`:
+Laptop production probing (navigation stays not-ready without a physical ToF source and real model):
 
-* **`http://127.0.0.1:8080/`**: Interactive web HUD showing live video, YOLO bounding boxes, ToF laser reticle, and FPS counter.
-* **`http://127.0.0.1:8080/stream`**: Multipart MJPEG video stream compatible with OpenCV, web browsers, and external dashboards.
-* **`http://127.0.0.1:8080/snapshot`**: Instant JPEG capture of the current annotated frame.
-* **`http://127.0.0.1:8080/metrics`**: JSON endpoint reporting active system statistics and detections.
+```bash
+python scripts/run_live_wearable.py --hardware laptop --serial-port /dev/drishti-tof --viewer
+```
 
-### 9.5 Parameter Tuning & Profile Overrides
-Adjust pipeline behaviors without modifying source code by editing [`config/pipeline_config.yaml`](config/pipeline_config.yaml) or passing runtime flags:
+Controls: `N` requests grounded SmolVLM2 scene narration; `C` requests banknote recognition then OCR; `Q` exits. Continuous banknote scanning is opt-in with `--continuous-currency`.
 
-* **Detection Confidence**: Lower or raise `detection_confidence_threshold` (default: `0.35`).
-* **Hazard Proximity**: Set `critical_distance_m` (default: `0.80 m`) to control when high-urgency sonification triggers.
-* **Audio Pitch Range**: Tune `base_frequency_hz` (`300 Hz`) and `max_frequency_hz` (`1200 Hz`) for custom binaural soundscapes.
-* **ToF Calibration Offset**: Set `distance_sensor.offset_mm` in [`config/hardware_dev.yaml`](config/hardware_dev.yaml) to eliminate lens glass offsets.
+For the current laptop + ESP32 workflow, stable device paths, Git practices, verification commands, and a reusable AI-session prompt are documented in [`docs/LAPTOP_WORKFLOW.md`](docs/LAPTOP_WORKFLOW.md).
 
----
+## Configuration
 
-## 10. License
+Runtime construction consumes [`config/pipeline_config.yaml`](config/pipeline_config.yaml) for detector thresholds/model/classes, camera/ToF geometry, currency support, spatial audio, OCR, narration, TTS, redaction, heartbeat cadence, and telemetry persistence. Hardware profiles are in [`config/hardware_dev.yaml`](config/hardware_dev.yaml) and [`config/hardware_pi5.yaml`](config/hardware_pi5.yaml).
 
-This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for complete terms.
+Geometry is loaded from `config/geometry_calibration.yaml` only when its measured calibration is verified. Generate it from real chessboard and ToF-spot samples with `scripts/calibrate_camera_geometry.py`. SmolVLM2 weights are provisioned by `scripts/download_models.py`; generation is temperature-zero, bounded, and performed only in the cognitive worker.
+
+The detector is COCO-based. Class aliases are validated at startup, and unsupported classes are reported in readiness rather than silently ignored.
+
+For wearable-specific stairs, curbs, poles, glass doors, hanging obstacles, and partial furniture, collect the dataset described in `evaluation/README.md`, fine-tune with `scripts/train_hazard_detector.py`, then update the detector model and label-map paths. No claim of improved recall is made until `scripts/evaluate_drishti.py` reports the held-out results.
+
+Spatial cues combine a 500–900 Hz distance component with a deterministic 2–5 kHz component for stronger ILD, use a smooth envelope and conservative limiter, and support separate air- and bone-conduction profiles. Generate and verify `-90°`, `-45°`, `0°`, `+45°`, and `+90°` cues with `scripts/calibrate_spatial_audio.py`. Bone-conduction profiles must be calibrated per user/headset and are not inferred from air-conduction settings.
+
+## Latency
+
+The only measured real VLM result is approximately 9.1 seconds on the development laptop. The sub-50 ms automated perception check uses simulation and is not a physical Pi/laptop benchmark. The ESP32 timing budget and software stage timers do not establish audible response time. Before trials, collect end-to-end p50/p95/p99 timestamps from sensor acquisition through physical audio/haptic onset. See [`docs/LATENCY.md`](docs/LATENCY.md).
+
+## Future equipment
+
+The proposed product architecture uses dense stereo/depth, multizone near-field and downward ranging, an IMU, an independent safety MCU/watchdog, and redundant audio/haptic critical output. The generative model remains outside the safety channel. Candidate compute and sensor trade-offs, regulatory references, manufacturing evidence, and release gates are in [`docs/INDUSTRY_ROADMAP.md`](docs/INDUSTRY_ROADMAP.md). These are future recommendations, not installed capabilities.
+
+## Interfaces
+
+MQTT topics are device-scoped:
+
+- `drishti/device/{device_id}/heartbeat`
+- `drishti/device/{device_id}/events`
+- `drishti/device/{device_id}/emergency`
+- `drishti/device/{device_id}/status` (retained last-will/status)
+
+With `--viewer`, the local debug server provides:
+
+- `/` — viewer UI
+- `/stream` — MJPEG stream
+- `/snapshot` — latest JPEG
+- `/metrics` — latest JSON perception/readiness state
+
+The supported Python API constructs `FastPerceptionPipeline(camera, distance_sensor, audio_sink, config=..., mode=...)` and calls `step()`. There is no `process_frame` API.
+
+## Verification and field-trial gate
+
+CI compiles the source, runs the test suite with a coverage threshold, and runs static checks. Before any supervised indoor trial, additionally verify on the exact assembled device:
+
+- model checksum/load, RGB preprocessing, target-class fixtures, and false-negative behavior;
+- measured camera intrinsics/FOV and camera-to-ToF alignment;
+- sensor stale-data rejection, disconnect/reconnect, and fail-closed announcements;
+- audio audibility, priority/preemption, and ambient-hearing preservation;
+- face-redaction false negatives and an explicit no-image-transmission policy;
+- MQTT TLS/authentication, offline persistence limits, replay, duplicate handling, and PUBACK removal;
+- battery/thermal behavior and emergency shutdown.
+
+Trials must use a sighted supervisor, a controlled indoor route, conservative stopping rules, incident logging, and the participant’s normal mobility aid. Outdoor or unsupervised trials are out of scope.
+
+## Licence
+
+Apache License 2.0. See [LICENSE](LICENSE).

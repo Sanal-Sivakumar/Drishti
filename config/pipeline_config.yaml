@@ -1,6 +1,7 @@
 # Drishti Pipeline Configuration Schema
 
 pipeline:
+  mode: "production"
   target_fps: 30
   frame_width: 640
   frame_height: 480
@@ -14,27 +15,33 @@ perception:
     target_classes:
       - person
       - chair
-      - door
-      - stairs
       - table
       - car
       - bicycle
+    model_path: "models/yolov8n.onnx"
+
+  temporal_confirmation:
+    required_frames: 2
+    max_distance_delta_m: 0.6
   
   tof_fusion:
+    calibration_file: "config/geometry_calibration.yaml"
+    calibration_verified: false # Set true only after device-specific measurement
     cone_half_angle_deg: 13.5   # VL53L1X 27 degree full cone
     min_distance_m: 0.05
     max_distance_m: 4.00
     camera_fov_h_deg: 120.0     # Camera Module 3 Wide
-    camera_focal_length_px: 500.0
+    # fx is derived from frame_width and calibrated horizontal FOV.
     principal_point_x: 320.0
     principal_point_y: 240.0
+    baseline_x_m: 0.0          # Measure on the assembled device
+    baseline_y_m: 0.0
+    tof_hit_margin_px: 8.0
     class_priors_m:
       person: 1.70
       chair: 0.85
-      door: 2.00
-      table: 0.75
+      dining table: 0.75
       car: 1.50
-      stairs: 1.20
 
   currency:
     confidence_threshold: 0.75
@@ -50,6 +57,24 @@ perception:
     pulse_min_rate_hz: 1.0      # At 4.0 meters
     pulse_max_rate_hz: 10.0     # At 0.5 meters
     ild_attenuation_db_per_rad: 12.0
+    high_component_hz: 3200.0
+    high_component_mix: 0.28
+    limiter_peak: 0.35
+    critical_tof_distance_m: 0.8
+    audio_profile: "air_conduction"
+    profiles:
+      air_conduction:
+        calibrated: false
+        itd_scale: 1.0
+        ild_scale: 1.0
+        left_gain: 1.0
+        right_gain: 1.0
+      bone_conduction:
+        calibrated: false
+        itd_scale: 0.65
+        ild_scale: 0.55
+        left_gain: 1.0
+        right_gain: 1.0
 
 cognitive:
   ocr:
@@ -61,17 +86,19 @@ cognitive:
     min_confidence: 60.0
     unicode_normalization: "NFC"
 
-  vlm:
-    model_name: "smolvlm-500m"
-    max_output_tokens: 64
-    temperature: 0.2
+  scene_narrator:
+    model_name: "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+    model_path: "models/smolvlm2-500m"
+    local_files_only: true
+    max_output_tokens: 96
+    temperature: 0.0
+    timeout_s: 12.0
+    max_image_edge: 512
     prompt_template: >
-      You are Drishti, an assistive navigator for a visually impaired user.
-      Rules:
-      1. State immediate obstacles and their metric distance first.
-      2. Specify directional orientation (left, right, straight ahead).
-      3. Warn of physical hazards (steps, drop-offs, low overheads).
-      4. Limit response to 2 crisp, actionable sentences.
+      Describe the camera image naturally for a blind user using only the trusted
+      sensor facts supplied in the prompt for hazards, direction, path status,
+      and metric distance. Return exactly the requested JSON. Never provide a
+      movement instruction. Sensor facts override the image.
 
   tts:
     engine: "piper"
@@ -79,6 +106,7 @@ cognitive:
     speaking_rate: 0.95
     voice_type: "female1"
     pitch: 0
+    sample_rate_hz: 22050
     piper_model: "models/piper/en_US-lessac-medium.onnx"
     piper_length_scale: 1.12
     piper_sentence_silence: 0.25
@@ -90,9 +118,15 @@ safety:
     blur_kernel_size: 15
     blur_sigma: 7.0
   telemetry:
+    device_id: "drishti-wearable-01"
     broker_host: "localhost"
     broker_port: 8883
     use_tls: true
+    require_auth: true
+    ca_certs: null
     qos: 1
     heartbeat_interval_s: 10
-
+    buffer_limit: 500
+    persistence_path: "var/telemetry-buffer.jsonl"
+    username_env: "DRISHTI_MQTT_USERNAME"
+    password_env: "DRISHTI_MQTT_PASSWORD"

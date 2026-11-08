@@ -10,6 +10,7 @@ import sys
 import socket
 import hashlib
 import urllib.request
+import subprocess
 from pathlib import Path
 
 # Prioritize IPv4 resolution to prevent DNS/IPv6 routing hangs on edge/container networks
@@ -135,6 +136,45 @@ def main() -> int:
             if not success or not dest.exists() or dest.stat().st_size < min_size:
                 print(f"[!] ERROR: Could not obtain valid neural model {filename}.")
                 failed_models.append(filename)
+
+    piper_dir = MODELS_DIR / "piper"
+    piper_model = piper_dir / "en_US-lessac-medium.onnx"
+    piper_config = piper_dir / "en_US-lessac-medium.onnx.json"
+    if not (piper_model.exists() and piper_config.exists()):
+        piper_dir.mkdir(parents=True, exist_ok=True)
+        print("[*] Provisioning Piper en_US-lessac-medium voice...")
+        result = subprocess.run(
+            [sys.executable, "-m", "piper.download_voices", "en_US-lessac-medium", "--download-dir", str(piper_dir)],
+            check=False,
+        )
+        if result.returncode != 0 or not (piper_model.exists() and piper_config.exists()):
+            failed_models.append("piper/en_US-lessac-medium")
+
+    vlm_dir = MODELS_DIR / "smolvlm2-500m"
+    def vlm_present() -> bool:
+        return (vlm_dir / "config.json").exists() and any(vlm_dir.glob("*.safetensors"))
+
+    if not vlm_present():
+        print("[*] Provisioning SmolVLM2-500M-Video-Instruct...")
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                repo_id="HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+                local_dir=str(vlm_dir),
+                allow_patterns=[
+                    "*.json",
+                    "*.safetensors",
+                    "merges.txt",
+                    "vocab.json",
+                ],
+            )
+        except Exception as exc:
+            print(f"[!] SmolVLM2 download failed: {exc}")
+            failed_models.append("smolvlm2-500m")
+        if not vlm_present():
+            if "smolvlm2-500m" not in failed_models:
+                failed_models.append("smolvlm2-500m")
 
     print("=" * 70)
     if failed_models:

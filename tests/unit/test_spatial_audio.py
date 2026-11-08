@@ -91,3 +91,21 @@ def test_fractional_delay_interpolation():
     assert np.isclose(delayed_frac[11], 0.0, atol=1e-5)
 
 
+def test_dual_band_cue_and_conservative_limiter():
+    synth = SpatialAudioSynthesizer(high_component_hz=3200.0, high_component_mix=0.3, limiter_peak=0.35)
+    pcm = synth.synthesize_obstacle_ping(0.0, 1.5, 0.1)
+    spectrum = np.abs(np.fft.rfft(pcm[:, 0]))
+    freqs = np.fft.rfftfreq(len(pcm), 1.0 / synth.sample_rate)
+    assert spectrum[(freqs > 2500) & (freqs < 4500)].max() > 1.0
+    assert np.max(np.abs(pcm)) <= 0.3501
+
+
+def test_bone_profile_scales_itd_and_ild():
+    profiles = {"bone_conduction": {"itd_scale": 0.6, "ild_scale": 0.5,
+                                     "left_gain": 0.9, "right_gain": 1.0,
+                                     "calibrated": True}}
+    air = SpatialAudioSynthesizer()
+    bone = SpatialAudioSynthesizer(audio_profile="bone_conduction", profiles=profiles)
+    assert np.isclose(bone.compute_itd_seconds(np.pi / 4), air.compute_itd_seconds(np.pi / 4) * 0.6)
+    assert bone.profile_calibrated is True
+

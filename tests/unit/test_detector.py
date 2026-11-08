@@ -110,3 +110,12 @@ def test_non_maximum_suppression_deduplication():
     assert len(nms_dets) == 2
     assert nms_dets[0]["confidence"] == 0.90
     assert nms_dets[1]["class_name"] == "tv"
+
+
+def test_parse_rejects_wrong_model_output_shape():
+    detector = HeadlessObjectDetector(allow_synthetic_fallback=False)
+    with pytest.raises(ValueError, match="box and class scores"):
+        detector._parse_onnx_outputs(
+            [np.zeros((1, 4, 10), dtype=np.float32)],
+            scale=1.0, pad_x=0, pad_y=0, orig_w=640, orig_h=640,
+        )

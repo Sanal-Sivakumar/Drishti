@@ -12,7 +12,7 @@ distance_sensor:
   min_valid_mm: 30
   max_valid_mm: 2000
   offset_mm: 0
-  fallback_backend: synthetic
+  # No production fallback. Use --hardware synthetic for explicit simulation.
 trigger_input:
   backend: esp32_buttons
   keyboard_fallback: true

@@ -1,6 +1,6 @@
 """Cognitive Subsystem: Local Speech Synthesis (TTS) Engine.
 
-Converts machine-extracted text, currency denominations, and VLM descriptions
+Converts machine-extracted text, currency denominations, and scene descriptions
 into natural spoken audio. The preferred backend is Piper neural TTS (natural,
 offline, 22 kHz); system speech dispatcher and espeak-ng remain as fallbacks.
 Playback is queued on a worker thread so a multi-second announcement never
@@ -28,6 +28,7 @@ import numpy as np
 from config.logging_config import get_logger
 from hal.audio_output import BaseAudioSink, HeadlessAudioRecorder
 from hal.audio_route import AudioRoute, detect_audio_route, playback_commands
+from hal.audio_priority import AudioPriority, PriorityAudioArbiter
 
 logger = get_logger("cognitive.speech")
 
@@ -61,6 +62,7 @@ class SpeechService:
         piper_length_scale: Optional[float] = None,
         piper_sentence_silence: float = 0.25,
         async_playback: bool = True,
+        audio_arbiter: Optional[PriorityAudioArbiter] = None,
     ) -> None:
         self.voice = voice
         self.speaking_rate = float(speaking_rate)
@@ -69,6 +71,7 @@ class SpeechService:
         self.sample_rate = int(sample_rate_hz)
         self.audio_sink = audio_sink
         self.async_playback = bool(async_playback)
+        self.audio_arbiter = audio_arbiter
 
         # Natural pacing: >1.0 is slower. A small base slowdown avoids the
         # clipped, rushed cadence of the raw model.
@@ -347,6 +350,15 @@ class SpeechService:
 
     def _play_text(self, text: str) -> Tuple[str, bool]:
         """Run the best available backend synchronously (worker thread)."""
+        if self.audio_arbiter is not None:
+            with self.audio_arbiter.lease(AudioPriority.SPEECH) as acquired:
+                if not acquired:
+                    return "preempted", False
+                return self._play_text_unarbitrated(text)
+        return self._play_text_unarbitrated(text)
+
+    def _play_text_unarbitrated(self, text: str) -> Tuple[str, bool]:
+        """Backend selection after the shared audio lease has been acquired."""
         if self.has_piper:
             backend, played = self._speak_piper(text)
             if played:

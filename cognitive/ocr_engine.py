@@ -43,9 +43,10 @@ class MultilingualOCREngine:
         Returns:
             np.ndarray: Grayscale normalized image (H, W), dtype uint8.
         """
-        # Convert to grayscale using ITU-R BT.601 standard luma weights
+        # Camera frames use OpenCV's BGR contract. BT.601 weights are applied
+        # in B, G, R order (the previous RGB ordering biased blue/red text).
         gray = (
-            0.299 * image[:, :, 0] + 0.587 * image[:, :, 1] + 0.114 * image[:, :, 2]
+            0.114 * image[:, :, 0] + 0.587 * image[:, :, 1] + 0.299 * image[:, :, 2]
         ).astype(np.uint8)
 
         # Contrast stretching (min-max normalization)
@@ -126,4 +127,3 @@ class MultilingualOCREngine:
 
         # In production mode without synthetic flag: return honest empty extraction
         return {"text": "", "script": "none", "confidence": 0.0, "lines": []}
-
