@@ -11,7 +11,7 @@ distance_sensor:
   stale_ms: 120
   min_valid_mm: 30
   max_valid_mm: 2000
-  offset_mm: 456
+  offset_mm: 0
   fallback_backend: synthetic
 trigger_input:
   backend: esp32_buttons

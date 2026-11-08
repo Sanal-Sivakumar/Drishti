@@ -229,15 +229,21 @@ python3 scripts/check_hardware_health.py
 The entire test suite runs completely headless without requiring physical cameras, I2C sensors, audio output hardware, or GUI display servers:
 
 ```bash
-# Run complete test suite (88 unit and integration tests)
+# Run complete test suite (92 unit and integration tests)
 pytest tests/ -v
 ```
 
-### 4. Zero-Offset ToF Calibration
-When physical hardware is connected, calibrate the VL53L0X sensor against a flat target at a known distance (e.g. 500 mm) to eliminate systematic optical offsets:
+### 4. Interactive ToF Distance Monitoring & Zero-Offset Calibration
+When physical hardware is connected, you can inspect the live Time-of-Flight sensor in real time and calibrate out systematic optical offsets:
 
 ```bash
-# Run interactive calibration and save to hardware_dev.yaml
+# Real-time interactive ASCII distance gauge & health monitor
+python3 scripts/monitor_tof.py
+
+# Probe sensor link and test tactile push buttons (10 seconds)
+python3 scripts/probe_esp32.py --duration 10
+
+# Run interactive zero-offset calibration and persist to hardware_dev.yaml
 python3 scripts/calibrate_tof.py --distance-mm 500 --samples 100 --save
 ```
 
@@ -317,11 +323,84 @@ journalctl -u drishti.service -f
 | **Phase 1** | **Fast Perception, Depth Fusion & 3D Spatial Audio**<br>- Woodworth ITD + ILD binaural acoustic synthesizer with sub-sample fractional delay (`np.interp`)<br>- Parallax-aware camera-ToF ray-cone spatial depth fusion to 3D Cartesian vectors $(X, Y, Z)$<br>- Indian Rupee (₹10–₹500) banknote classifier with anisotropy and contour solidity gating<br>- V4L2/OpenCV live webcam streaming and ALSA/PipeWire direct speaker output | ✅ **Completed** | **Checkpoint 1**: Verified via `test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`. |
 | **Phase 2** | **Multilingual Indic OCR & On-Demand VLM Narration**<br>- Unicode NFC normalized OCR (English, Hindi, Tamil, Malayalam)<br>- Compact local VLM scene describer (SmolVLM / Moondream2)<br>- Offline Piper neural TTS (`en_US-lessac-medium`) with non-blocking async queue and system fallbacks | ✅ **Completed** | **Checkpoint 2**: Multi-script accuracy and 2-sentence navigational speech verified via `test_ocr.py`, `test_vlm.py`, `test_speech.py`. |
 | **Phase 3** | **Edge Privacy, Telemetry & Headless Browser Viewer**<br>- Local Gaussian face and PII redaction filter ($G_\sigma(x, y)$ convolution)<br>- Mosquitto MQTT telemetry publisher with TLS 1.3 & QoS 1 (paho v2)<br>- Live browser MJPEG debug viewer (`perception/debug_viewer.py` on `:8080`)<br>- Adaptive YOLO ONNX denormalization for live bounding boxes | ✅ **Completed** | **Checkpoint 3**: 88/88 tests passing, verified across full pytest suite. |
-| **Phase 4** | **Physical Hardware Assembly, Zero-Offset Calibration & Edge Deployment**<br>- ESP32 DevKit V1 firmware flashing and breadboard verification (`drishti_tof.ino`)<br>- Optical zero-offset ToF wall calibration (`scripts/calibrate_tof.py`)<br>- Automated Raspberry Pi 5 appliance setup (`scripts/setup_raspberry_pi.sh`)<br>- Systemd background service deployment (`config/drishti.service`) | 🔄 **Active / In Progress** | **Checkpoint 4**: Hardware probe verification on physical sensor link and live field navigation. |
-
+| **Phase 4** | **Physical Hardware Assembly, Zero-Offset Calibration & Edge Deployment**<br>- ESP32 DevKit V1 firmware flashing and breadboard verification (`drishti_tof.ino`)<br>- ST VL53L0X Long-Range profile (33 ms budget, 0.1 MCPS rate limit, auto-interrupt recovery)<br>- Optical zero-offset ToF wall calibration (`scripts/calibrate_tof.py`)<br>- Real-time interactive ToF distance monitor CLI (`scripts/monitor_tof.py`)<br>- Automated Raspberry Pi 5 appliance setup (`scripts/setup_raspberry_pi.sh`)<br>- Systemd background service deployment (`config/drishti.service`) | ✅ **Completed** | **Checkpoint 4**: Hardware probe verified live on physical link @ 32.6 Hz, 0.0% packet errors, 92/92 tests passing. |
+| **Phase 5** | **Field Optimization & External Software Interfacing**<br>- Hailo-8L NPU pipeline acceleration<br>- ROS2 / external robotics and assistive software bridge integration<br>- Field navigation trials with visually impaired participants | 🔄 **Active / In Progress** | **Checkpoint 5**: Multi-software synchronization, zero-latency ROS2 message bridge, and outdoor navigation. |
 
 ---
 
-## 9. License
+## 9. External Software Integration & Inter-Process Tuning
+
+Drishti is designed as an open, decoupled perception engine that can easily be tuned, driven, or consumed by external software (such as ROS2 navigation nodes, assistive companion apps, custom robot controllers, or headless telemetry aggregators).
+
+### 9.1 In-Process Python Perception API
+Another Python process or framework can import and execute the fast perception pipeline directly:
+
+```python
+import cv2
+from perception.pipeline_fast import FastPerceptionPipeline
+from config.config_loader import load_pipeline_config
+
+# Initialize pipeline with configuration schema
+cfg = load_pipeline_config("config/pipeline_config.yaml")
+pipeline = FastPerceptionPipeline(config=cfg)
+
+# Pass any BGR numpy frame (e.g. from ROS sensor_msgs/Image or another camera)
+frame = cv2.imread("scene.jpg")
+result = pipeline.process_frame(frame, current_distance_m=1.25)
+
+# Extract 3D obstacle vectors, class labels, and audio cues
+for obstacle in result.obstacles:
+    print(f"Detected: {obstacle.label} ({obstacle.confidence:.2f})")
+    print(f"  3D Coordinates: X={obstacle.x_m:.2f}m, Y={obstacle.y_m:.2f}m, Z={obstacle.z_m:.2f}m")
+    print(f"  Is Fused with Laser: {obstacle.is_laser_fused}")
+
+# Synthesized stereo audio buffer (44.1 kHz float32)
+audio_stereo = result.binaural_audio
+```
+
+### 9.2 USB Serial Hardware Telemetry Protocol
+The ESP32 sensor MCU streams deterministic ASCII CSV frames over USB serial at **921600 baud (8N1)**. External processes (e.g., a ROS2 serial driver, micro-ROS, or a C++ daemon) can connect directly to `/dev/ttyUSB0` or `/dev/drishti-tof`:
+
+```
+MCU -> Host:
+  D,<seq>,<t_ms>,<mm_filtered>,<mm_raw>,<status>,<button_mask>   # ~30 Hz Range & Button State
+  B,<button_id>,<t_ms>,<edge>                                    # Button Event (1=press, 0=release)
+  S,<hz>,<invalid_pct>,<i2c_ok>,<link_ok>                         # 1 Hz Health Diagnostics
+  I,<firmware_version>,<sensor_model>                            # Boot Announcement
+
+Host -> MCU:
+  V\n   # Request firmware banner
+  P\n   # 500 ms heartbeat
+  R\n   # Soft reset MCU
+```
+
+### 9.3 MQTT Telemetry & Caregiver Event Bus
+Drishti publishes structured, privacy-redacted JSON telemetry to a Mosquitto MQTT broker (`localhost:1883` or TLS `8883`):
+
+| MQTT Topic | Payload Schema | Purpose |
+| :--- | :--- | :--- |
+| `drishti/telemetry/heartbeat` | `{"seq": int, "fps": float, "hazard_dist_m": float, "system_health": str}` | 1 Hz periodic health broadcast |
+| `drishti/telemetry/events` | `{"event_type": str, "label": str, "timestamp": float, "metadata": dict}` | Button clicks, currency matches, OCR text |
+| `drishti/telemetry/alerts` | `{"alert_level": "WARNING"|"CRITICAL", "hazard": str, "distance_m": float}` | Immediate obstacle proximity warning |
+
+### 9.4 Web Viewer & HTTP Streaming Endpoints
+When launched with `--viewer`, Drishti hosts a lightweight, zero-dependency HTTP server on port `8080`:
+
+* **`http://127.0.0.1:8080/`**: Interactive web HUD showing live video, YOLO bounding boxes, ToF laser reticle, and FPS counter.
+* **`http://127.0.0.1:8080/stream`**: Multipart MJPEG video stream compatible with OpenCV, web browsers, and external dashboards.
+* **`http://127.0.0.1:8080/snapshot`**: Instant JPEG capture of the current annotated frame.
+* **`http://127.0.0.1:8080/metrics`**: JSON endpoint reporting active system statistics and detections.
+
+### 9.5 Parameter Tuning & Profile Overrides
+Adjust pipeline behaviors without modifying source code by editing [`config/pipeline_config.yaml`](config/pipeline_config.yaml) or passing runtime flags:
+
+* **Detection Confidence**: Lower or raise `detection_confidence_threshold` (default: `0.35`).
+* **Hazard Proximity**: Set `critical_distance_m` (default: `0.80 m`) to control when high-urgency sonification triggers.
+* **Audio Pitch Range**: Tune `base_frequency_hz` (`300 Hz`) and `max_frequency_hz` (`1200 Hz`) for custom binaural soundscapes.
+* **ToF Calibration Offset**: Set `distance_sensor.offset_mm` in [`config/hardware_dev.yaml`](config/hardware_dev.yaml) to eliminate lens glass offsets.
+
+---
+
+## 10. License
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for complete terms.

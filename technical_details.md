@@ -14,6 +14,7 @@ This document is engineered to provide an exhaustive, beginner-to-advanced deep 
 7. [Vision-Language Models (VLM) for Scene Narration](#7-vision-language-models-vlm-for-scene-narration)
 8. [Psychoacoustics & 3D Spatial Audio Synthesis (ITD & ILD)](#8-psychoacoustics--3d-spatial-audio-synthesis-itd--ild)
 9. [Edge Privacy & Caregiver Telemetry Architecture](#9-edge-privacy--caregiver-telemetry-architecture)
+10. [Inter-Process Architecture & External Software Interfacing](#10-inter-process-architecture--external-software-interfacing)
 
 ---
 
@@ -195,6 +196,36 @@ At long range ($Z \to \infty$), the spot converges toward the principal point $(
 Rather than assigning ToF depth to all objects merely intersecting the 2D cone, Drishti evaluates a **point-in-box hit test**:
 $$(u_{min} - \epsilon) \le u_{spot} \le (u_{max} + \epsilon) \quad \text{and} \quad (v_{min} - \epsilon) \le v_{spot} \le (v_{max} + \epsilon)$$
 where $\epsilon = 8\text{ px}$ is the tolerance margin. When multiple overlapping boxes contain the laser spot, the algorithm selects the box with the smallest 2D area (the most specific foreground obstacle). All other detections retain their geometric height priors.
+
+### 3.7 Continuous Ranging Timing Budget & VCSEL Pulse Periods
+For an infrared Time-of-Flight sensor operating in continuous mode (e.g. ST VL53L0X), range measurements rely on an internal finite-state sequencer dividing photon acquisition into five distinct stages:
+1. $T_{start}$: Initialization & start overhead ($\approx 1910\,\mu\text{s}$)
+2. $T_{msrc}$: Minimum Signal Rate Check ($\approx 660\,\mu\text{s}$)
+3. $T_{tcc}$: Target Convergence Check ($\approx 590\,\mu\text{s}$)
+4. $T_{pre}$: Pre-Range phase detection ($\approx 660\,\mu\text{s}$)
+5. $T_{final}$: Final Range photon accumulation ($\approx 550\,\mu\text{s}$)
+
+The total required measurement timing budget $T_{budget}$ must satisfy:
+$$T_{budget} \ge T_{start} + T_{tcc} + T_{msrc} + T_{pre} + T_{final} + \Delta_{final\_range}$$
+
+When configuring long-range sensitivity, the laser pulse periods are expanded:
+* Pre-range pulse period: $14 \to 18\,\text{PCLKs}$
+* Final-range pulse period: $10 \to 14\,\text{PCLKs}$
+
+Because each macro-period clock (MClk) now encompasses more physical clock cycles, the accumulated sequence step timeouts grow:
+$$t_{\mu s} = \frac{\tau_{mclk} \cdot \mu_{period\_ns} + 500}{1000}$$
+
+At periods $(18, 14)$, the minimum feasible sequence timeout is approximately $33\,000\,\mu\text{s}$ ($33\text{ ms}$). Setting $T_{budget} \le 20\text{ ms}$ causes $T_{used} > T_{budget}$, causing the internal ST sequencer to reject the timing budget and fail to converge on targets beyond $5\text{ cm}$. Configuring $T_{budget} = 33\text{ ms}$ ($\approx 30.3\text{ Hz}$) allows full photon convergence up to $2.0\text{ m}$.
+
+### 3.8 Zero-Offset Optical Calibration
+Every physical sensor package experiences propagation delays and optical phase shifts through protective acrylic cover glass:
+$$d_{measured} = d_{true} + \Delta_{glass} + \Delta_{prop}$$
+where $\Delta_{glass} = t_{cover} \cdot \left(1 - \frac{1}{n_{cover}}\right)$ and $\Delta_{prop}$ is the semiconductor switching delay.
+
+Drishti eliminates this systematic error via empirical zero-offset calibration:
+$$\Delta_{offset} = d_{ground\_truth} - \frac{1}{N}\sum_{i=1}^N d_{raw, i}$$
+The resulting integer offset $\Delta_{offset}$ is persisted in hardware configuration and applied at runtime:
+$$d_{calibrated} = d_{raw} + \Delta_{offset}$$
 
 ---
 
@@ -576,3 +607,44 @@ Drishti communicates with the caregiver Flutter companion app using the lightwei
 1. **Transport Layer Security (TLS 1.3)**: All MQTT payloads are encrypted using asymmetric RSA-2048 or ECDSA certificates with AES-256-GCM symmetric transport encryption.
 2. **Quality of Service (QoS Level 1)**: Emergency alerts use QoS 1 (*At least once delivery*). The client buffers the alert until the broker returns a packet acknowledgment (`PUBACK`), guaranteeing that emergency distress calls are not dropped during spotty cellular coverage.
 3. **Last Will and Testament (LWT)**: When Drishti connects to the MQTT broker, it registers an LWT payload on topic `drishti/device/{id}/status`. If the wearable battery dies or the cellular connection abruptly drops, the broker automatically publishes an `OFFLINE_EMERGENCY` notification to the caregiver.
+
+---
+
+# 10. Inter-Process Architecture & External Software Interfacing
+
+To facilitate tuning, sensor fusion, and multi-agent coordination with external software systems (such as ROS2 navigation nodes, micro-ROS microcontrollers, or companion mobile apps), Drishti decouples its subsystems using three distinct inter-process communication mechanisms:
+
+### 10.1 High-Speed Serial Hardware Tap (UART Bandwidth Derivation)
+The hardware sensor MCU (ESP32 DevKit V1) communicates with the host compute unit over USB-UART using a CP2102 or CH340 bridge running at $B = 921\,600\,\text{baud}$ with standard $8\text{N}1$ framing ($1\text{ start bit} + 8\text{ data bits} + 1\text{ stop bit} = 10\text{ bits/byte}$).
+
+The maximum physical byte throughput is:
+$$\Phi_{max} = \frac{921\,600\,\text{bits/s}}{10\,\text{bits/byte}} = 92\,160\,\text{bytes/s} \approx 92.16\,\text{KB/s}$$
+
+A standard ranging telemetry line (`D,<seq>,<t_ms>,<mm_filtered>,<mm_raw>,<status>,<button_mask>\n`) averages $L_{frame} \approx 36\text{ bytes}$. At a sampling frequency of $f_s = 33\,\text{Hz}$:
+$$\text{Bandwidth Demand} = 36\,\text{bytes/frame} \times 33\,\text{frames/s} = 1\,188\,\text{bytes/s} \approx 1.19\,\text{KB/s}$$
+
+The bus utilization factor is:
+$$\rho = \frac{1\,188\,\text{bytes/s}}{92\,160\,\text{bytes/s}} \approx 1.29\%$$
+
+This minimal $1.29\%$ utilization guarantees that serial communication never experiences buffer bloat, yielding deterministic transmission latencies:
+$$t_{serial} = \frac{36 \times 10}{921\,600} \approx 0.39\,\text{ms} < 0.5\,\text{ms}$$
+
+### 10.2 Synchronous In-Process Python Perception API
+For embedding directly into Python-based robotic stacks (e.g. ROS2 nodes via `rclpy`):
+```python
+# Pass raw BGR array and metric distance into FastPerceptionPipeline
+result = pipeline.process_frame(frame, current_distance_m=1.35)
+# Direct access to result.obstacles, result.binaural_audio, and result.hazard_level
+```
+Because frames are passed as continuous NumPy memory views (`ndarray`), frame transfer introduces zero memory-copy overhead ($O(1)$ pointer passing).
+
+### 10.3 Asynchronous Telemetry Message Bus (MQTT)
+External distributed software components consume JSON telemetry streams without polling:
+* **Heartbeat Stream** (`drishti/telemetry/heartbeat`): Periodic telemetry with active FPS, battery level, and primary hazard vector.
+* **Event Stream** (`drishti/telemetry/events`): Discrete occurrences (tactile button press, recognized currency denomination, OCR transcript).
+* **Alert Stream** (`drishti/telemetry/alerts`): High-priority obstacle warnings when distance falls below `critical_distance_m`.
+
+### 10.4 Web HUD & MJPEG Streaming Server
+An embedded HTTP daemon provides an accessible real-time visual feed on port `8080`:
+* `/stream`: Multipart JPEG stream (`multipart/x-mixed-replace; boundary=frame`) for zero-dependency browser or OpenCV consumption.
+* `/metrics`: JSON state metrics for telemetry dashboards.

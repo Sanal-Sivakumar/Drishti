@@ -45,6 +45,66 @@ This ledger documents known failure modes, root causes, reproducible diagnostics
 
 ---
 
+### 1.3 ESP32 VL53L0X Ranging Lockup (`status: 254`, `raw: 65535` or Ranging Halts)
+
+#### Symptom: Sensor link connects, but samples show `status=254`, `raw=65535`, or streaming rate drops from 33 Hz to 10 Hz
+- **Root Cause**:
+  1. ST Microelectronics VL53L0X long-range profile (`PreRange=18`, `FinalRange=14`) requires at least a **33 ms** measurement timing budget. If configured with $\le 20 \text{ ms}$, the internal sequencer timeouts exceed the budget and cause silent ranging errors.
+  2. Pololu's `readRangeContinuousMillimeters()` returns `65535` upon timeout *without clearing the hardware interrupt register*. This leaves the sensor state machine in an uncleared interrupt state, permanently latching all future reads into timeout.
+- **Diagnostic Command**:
+  ```bash
+  # Probe sensor link and inspect status flags
+  python3 scripts/probe_esp32.py --duration 5
+  # Or observe live dynamic gauge
+  python3 scripts/monitor_tof.py
+  ```
+- **Fix**:
+  1. Set `TIMING_BUDGET_MS = 33` in `firmware/drishti_tof/drishti_tof.ino`.
+  2. Add active interrupt recovery in firmware: if `sensor.timeoutOccurred()`, explicitly write `0x01` to `SYSTEM_INTERRUPT_CLEAR (0x0B)` over I2C.
+  3. Lower the return signal rate limit to `0.10 MCPS` for reliable target acquisition up to 2.0 m.
+
+---
+
+### 1.4 Tactile Push Buttons Stuck Active (`buttonMask = 3` or Continuous Press)
+
+#### Symptom: Probe reports `>>> button 1 pressed` and `button 2 pressed` constantly without physical contact
+- **Root Cause**:
+  Standard 6x6 mm 4-pin tactile switches have internal connection pairs across two opposite sides. Inserting the switch rotated by $90^\circ$ across the breadboard trench bridges GPIO directly to the GND rail permanently, pulling the active-low input to `0V`.
+- **Diagnostic Command**:
+  ```bash
+  python3 scripts/probe_esp32.py --duration 3
+  # Inspect 'buttonMask': if 3 (binary 11), both inputs are shorted to ground
+  ```
+- **Fix**:
+  1. Rotate the push button $90^\circ$ so that the internally tied leg pairs straddle the breadboard center trench, leaving the circuit open until pressed.
+  2. Ensure inputs are configured as `pinMode(pin, INPUT_PULLUP)` with 30 ms debouncing.
+
+---
+
+### 1.5 YOLOv8 ONNX Coordinate Denormalization & Clamping
+
+#### Symptom: YOLO detections trigger internally, but bounding boxes appear compressed to `0x0` pixels or `[0, 1]` on the HUD
+- **Root Cause**:
+  Some exported YOLOv8 ONNX models output normalized coordinates $[x, y, w, h] \in [0.0, 1.0]$ rather than absolute pixel coordinates $[0, 640]$. If the post-processing parser naively treats normalized coordinates as pixels and clamps them, bounding boxes collapse into degenerate $1 \times 1$ pixel boxes.
+- **Diagnostic Command**:
+  ```bash
+  python3 -m pytest tests/unit/test_detector.py -k "test_parse_onnx_outputs" -v
+  ```
+- **Fix**:
+  `perception/detector.py` uses adaptive denormalization: if $x_{max} \le 1.05$, the detector scales coordinates by original image dimensions $(W_{orig}, H_{orig})$ before clamping and filters out degenerate boxes ($\le 2 \text{ px}$).
+
+---
+
+### 1.6 Camera Auto-Exposure Warmup False Monochrome Warning
+
+#### Symptom: `_probe_opencv_cameras` logs `warning: camera index 0 is monochrome` on colour webcams
+- **Root Cause**:
+  Initial frames from USB webcams during hardware auto-exposure and white-balance initialization often have minimal chrominance deviation ($\sigma_{color} < 3.0$), causing premature classification as monochrome.
+- **Fix**:
+  `hal/camera.py` includes a 3-frame warmup buffer in `_probe_opencv_cameras` to allow sensor AGC/AWB to stabilize before checking channel divergence.
+
+---
+
 ## 2. Audio Subsystem & Spatial Cues
 
 ### 2.1 ALSA / PulseAudio Buffer Underrun (`xrun`)

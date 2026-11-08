@@ -42,11 +42,12 @@ ASCII CSV, newline terminated, **921600 8N1**.
 
 | Setting | Value | Why |
 |---|---|---|
-| Timing budget | 20 ms | ~30–50 Hz, good indoor accuracy |
-| Signal rate limit | 0.25 MCPS | Long-range profile |
-| VCSEL pre-range | 18 | Long-range profile |
-| VCSEL final-range | 14 | Long-range profile |
+| Timing budget | 33 ms | ~30–33 Hz, required for long-range VCSEL pulse periods |
+| Signal rate limit | 0.10 MCPS | High sensitivity long-range profile up to 2.0 m |
+| VCSEL pre-range | 18 | Longer laser pulse for maximum distance |
+| VCSEL final-range | 14 | Longer laser pulse for maximum distance |
 | Validity window | 30–2000 mm | Reject floor/no-target artefacts |
+| Timeout recovery | Auto-clear reg `0x0B` | Prevents hardware interrupt state machine lockup |
 | Filter | median-of-5 + EMA (α 0.3) | Suppress speckle without lag |
 
 Range is roughly **1.2–2.0 m** depending on target reflectivity and ambient
@@ -54,7 +55,7 @@ light. Black fabric and direct sunlight reduce it.
 
 ---
 
-## Build
+## Build & Diagnostic Tools
 
 PlatformIO:
 
@@ -65,6 +66,12 @@ pio device monitor -b 921600
 
 Arduino IDE: board **ESP32 Dev Module**, library **VL53L0X by Pololu**,
 upload speed 921600.
+
+### Host Diagnostic Utilities:
+
+- **Live Distance Gauge**: `python3 scripts/monitor_tof.py` (real-time ASCII distance bar)
+- **Link & Button Probe**: `python3 scripts/probe_esp32.py --duration 10`
+- **Zero-Offset Calibration**: `python3 scripts/calibrate_tof.py --distance-mm 500 --samples 100 --save`
 
 ---
 

@@ -85,7 +85,7 @@ All configuration is centralized in `pyproject.toml`. All functions must have co
 ```bash
 pytest tests/ -v --cov=. --cov-report=term-missing
 ```
-All 88 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
+All 92 unit and integration tests must pass cleanly. Minimum acceptable line coverage across core modules is $85\%$.
 
 ### Gate 3: Quantitative Latency Budget Check
 Every perception and audio commit must be benchmarked against latency limits:
@@ -129,13 +129,50 @@ As of the current milestone, the engineering baseline stands as follows:
 | Subsystem / Phase | Current State | Verification Passed |
 | :--- | :--- | :--- |
 | **Phase 0: HAL** | Abstract Base Classes + Synthetic Drivers + V4L2/OpenCV physical camera with process lifecycle management (`__enter__`/`__exit__`, `kill()` on timeout) + ESP32 DevKit V1 USB-serial 921600 baud deterministic link (`hal/esp32_link.py`) with sequence-gap detection and button latching + ALSA / PipeWire Bluetooth A2DP audio routing (`hal/audio_route.py`) | `tests/unit/test_hal.py`, `tests/unit/test_esp32_link.py`, `tests/unit/test_audio_route.py` (20/20 PASSED) |
-| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector with COCO alias normalization and synthetic chair rejection, 3D Spatial Audio (Continuous Fractional Delay interpolation via `np.interp`, ITD + ILD + PRF), Parallax-Aware Ray-Cone Depth Fusion with Point-in-Bbox Hit Testing, BGR INR Banknote Classifier with Anisotropy / Solidity Gating (`identify_currency`), Opt-in Currency Mode | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py` (24/24 PASSED) |
+| **Phase 1: Fast Perception** | YOLOv8n ONNX Object Detector with adaptive coordinate denormalization and COCO alias normalization, 3D Spatial Audio (Continuous Fractional Delay interpolation via `np.interp`, ITD + ILD + PRF), Parallax-Aware Ray-Cone Depth Fusion with Point-in-Bbox Hit Testing, BGR INR Banknote Classifier with Anisotropy / Solidity Gating (`identify_currency`), Opt-in Currency Mode | `tests/unit/test_spatial_audio.py`, `test_depth_fusion.py`, `test_currency.py`, `test_fast_pipeline.py`, `test_detector.py` (27/27 PASSED) |
 | **Phase 2: Cognitive (OCR & VLM)** | Multilingual Indic OCR (Eng, Hin, Tam, Mal NFC), Multimodal Spatial Scene Narrator & ONNX VLM runner, Local Speech with Offline Piper Neural Voices (`en_US-lessac-medium`) and Async Worker Queue, Natural Pacing Fallbacks (`spd-say`, `espeak-ng`) | `tests/unit/test_ocr.py`, `tests/unit/test_vlm.py`, `tests/unit/test_speech.py` (15/15 PASSED) |
 | **Phase 3: Safety, Telemetry & Tools** | Local 2D Vectorized Gaussian Face Redaction (`cv2.GaussianBlur` priority with scipy/numpy fallbacks), Mosquitto MQTT Telemetry (TLS 1.3, QoS 1, paho v2), Headless Browser MJPEG Debug Viewer (`perception/debug_viewer.py` on `:8080`), PTY Fake ESP32 Emulator (`tools/fake_esp32.py`) | `tests/unit/test_anonymizer.py`, `tests/unit/test_telemetry.py`, `tests/unit/test_debug_viewer.py`, `tests/integration/test_pipeline.py` (17/17 PASSED) |
+| **Phase 4: Hardware Assembly & Deploy** | Physical ESP32 DevKit V1 + VL53L0X breadboard & soldered assembly verified live; firmware updated with 33 ms long-range timing budget, 0.1 MCPS signal rate limit, and auto-clearing ST interrupt recovery (`0x0B`); verified 32.6 Hz stream with 0.0% packet errors and zero sequence drops; optical zero-offset calibration tool (`scripts/calibrate_tof.py`); real-time ASCII distance monitor (`scripts/monitor_tof.py`); automated Pi 5 provisioning script (`scripts/setup_raspberry_pi.sh`) and systemd daemon (`config/drishti.service`) | `scripts/probe_esp32.py`, `scripts/monitor_tof.py`, `tests/unit/test_calibrate_tof.py`, `tests/unit/test_monitor_tof.py` (8/8 PASSED) |
 | **Config & Tooling** | Strict schema validation (`validate_pipeline_config`, `validate_hardware_config` including `esp32_serial`), `pyproject.toml` standardized tooling, Hardware health diagnostic CLI with `--serial-port` support (`scripts/check_hardware_health.py`), ESP32 probe CLI (`scripts/probe_esp32.py`) | `tests/unit/test_config_loader.py` (4/4 PASSED) |
-| **Hardware Verification** | Laptop webcam (`/dev/video0`), ESP32 DevKit V1 + VL53L0X USB-serial sensor link, stereo Bluetooth earbuds (A2DP verified), and synthetic fallback tested live; non-destructive hardware health auditor | `scripts/check_hardware_health.py`, `scripts/probe_esp32.py`, `scripts/run_live_wearable.py` |
-| **CI / CD** | GitHub Actions multi-version matrix (Python 3.10, 3.11, 3.12) with model SHA-256 verification and `pyproject.toml` packaging | `.github/workflows/ci.yml` (80/80 Tests Passing) |
-| **Next Tasks (Phase 4)** | Hailo-8L NPU pipeline acceleration, 3D wearable enclosure, and field navigation trials | Scheduled |
+| **Total Automated Tests** | **92/92 Headless Tests Passing Cleanly** across unit and end-to-end integration suites | `pytest tests/ -v` (100% PASSED) |
+| **Next Tasks (Phase 5)** | Hailo-8L NPU pipeline acceleration, ROS2 message bridge, and outdoor navigation field trials | Scheduled |
+
+---
+
+## 7. External Software Interfacing & Inter-Process Tuning Guide
+
+When integrating Drishti with external software stacks (e.g. ROS2 nodes, mobile companion apps, or custom autonomous navigation frameworks):
+
+### 7.1 Python API Interface
+External scripts can import the core pipeline cleanly:
+```python
+from perception.pipeline_fast import FastPerceptionPipeline
+from config.config_loader import load_pipeline_config
+
+cfg = load_pipeline_config("config/pipeline_config.yaml")
+pipeline = FastPerceptionPipeline(config=cfg)
+# Feed BGR image array + ToF distance in meters
+result = pipeline.process_frame(frame, current_distance_m=1.45)
+# Access result.obstacles (list of 3D vectors), result.binaural_audio (float32 array)
+```
+
+### 7.2 Hardware Telemetry Serial Tap
+Connect to the ESP32 CP2102 UART bridge (`/dev/ttyUSB0` or `/dev/drishti-tof`) at **921600 baud 8N1**:
+* Line: `D,<seq>,<t_ms>,<mm_filtered>,<mm_raw>,<status>,<button_mask>`
+* Status: `0` = valid reflection, `1` = out of range (> 2.0 m), `2` = < 30 mm, `254` = timeout.
+* Buttons: Bit 0 = Button 1 (GPIO 32, Narration), Bit 1 = Button 2 (GPIO 33, Currency/OCR).
+
+### 7.3 MQTT Telemetry Bus
+External processes can subscribe to JSON events published locally:
+* `drishti/telemetry/heartbeat`: periodic status, fps, primary hazard distance.
+* `drishti/telemetry/events`: button clicks, recognized currency notes, extracted text.
+* `drishti/telemetry/alerts`: urgent proximity collision warnings.
+
+### 7.4 Live MJPEG Video Stream
+When running with `--viewer`, the debug stream is exposed at:
+* Video Stream: `http://127.0.0.1:8080/stream`
+* Frame Snapshot: `http://127.0.0.1:8080/snapshot`
+* Metrics JSON: `http://127.0.0.1:8080/metrics`
 
 
 
