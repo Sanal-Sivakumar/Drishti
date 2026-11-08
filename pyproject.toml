@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "drishti"
 version = "1.0.0"
 description = "Assistive Edge-AI Wearable for Visually Impaired Spatial Navigation"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     { name = "Drishti Team", email = "sanalsiva2005@gmail.com" }
@@ -44,6 +45,31 @@ vlm = [
     "num2words>=0.5.14",
 ]
 training = ["ultralytics>=8.3.0"]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["pipeline"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "cognitive*",
+    "config*",
+    "hal*",
+    "perception*",
+    "safety*",
+]
+exclude = [
+    "evaluation*",
+    "firmware*",
+    "models*",
+    "scripts*",
+    "tests*",
+]
+namespaces = true
+
+[tool.setuptools.package-data]
+config = ["*.yaml", "*.service"]
 
 [tool.ruff]
 line-length = 100
