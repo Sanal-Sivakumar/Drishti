@@ -21,6 +21,11 @@ from typing import Any, Callable, Dict, List, Optional
 import cv2
 import numpy as np
 import requests
+import socket
+import urllib3.util.connection as urllib3_conn
+
+# Prioritize IPv4 to prevent IPv6 routing timeouts on edge networks
+urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
 
 from config.logging_config import get_logger
 
@@ -41,7 +46,7 @@ def load_env_file(env_path: Optional[str | Path] = None) -> None:
                 k, v = line.split("=", 1)
                 k = k.strip()
                 v = v.strip().strip("'\"")
-                if k and k not in os.environ:
+                if k and v and (k not in os.environ or not os.environ[k].strip()):
                     os.environ[k] = v
     except Exception as exc:
         logger.warning(f"Could not read .env file: {exc}")
@@ -55,30 +60,35 @@ class OnlineVisionService:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout_s: float = 8.0,
+        timeout_s: float = 12.0,
         synthetic_mode: bool = False,
         mock_fn: Optional[Callable[[str, str], str]] = None,
     ) -> None:
         load_env_file()
         self.synthetic_mode = synthetic_mode
         self.mock_fn = mock_fn
-        self.timeout_s = timeout_s
+        self.timeout_s = timeout_s or 12.0
 
         # Resolve provider and API key
+        env_provider = os.environ.get("DRISHTI_VISION_PROVIDER", "").strip().lower()
+        has_gemini = bool(os.environ.get("GEMINI_API_KEY", "").strip())
+        has_openai = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
         resolved_provider = (
             provider
-            or os.environ.get("DRISHTI_VISION_PROVIDER")
-            or ("openai" if os.environ.get("OPENAI_API_KEY") else "gemini" if os.environ.get("GEMINI_API_KEY") else "openai")
+            or (env_provider if env_provider in ("gemini", "openai") else None)
+            or ("gemini" if has_gemini and not has_openai else "openai")
         ).lower()
         self.provider = resolved_provider
 
+        env_model = os.environ.get("DRISHTI_VISION_MODEL", "").strip()
         if self.provider == "gemini":
-            self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
-            self.model = model or os.environ.get("DRISHTI_VISION_MODEL", "gemini-2.5-flash")
+            self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "").strip()
+            self.model = model or (env_model if env_model else "gemini-3.1-flash-lite")
         else:
             self.provider = "openai"
-            self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
-            self.model = model or os.environ.get("DRISHTI_VISION_MODEL", "gpt-4o-mini")
+            self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "").strip()
+            self.model = model or (env_model if env_model else "gpt-4o-mini")
 
         self.has_key = bool(self.api_key and len(self.api_key.strip()) > 5)
 
