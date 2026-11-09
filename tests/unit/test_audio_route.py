@@ -61,3 +61,10 @@ def test_playback_commands_returns_available_players():
     assert commands
     assert all(isinstance(command, list) for command in commands)
     assert any(command[-1] == "/tmp/test.wav" for command in commands)
+
+
+def test_alsa_audio_sink_initialization_survives_missing_portaudio():
+    from hal.audio_output import ALSAAudioSink
+    sink = ALSAAudioSink(device="default")
+    assert sink.is_running is True
+    sink.stop()

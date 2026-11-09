@@ -34,6 +34,7 @@ class BaseAudioSink(ABC):
 
 from collections import deque
 import queue
+import shutil
 import subprocess
 
 
@@ -109,7 +110,7 @@ class ALSAAudioSink(BaseAudioSink):
         try:
             import sounddevice as sd
             self.sd = sd
-        except ImportError:
+        except (ImportError, OSError, Exception):
             self.sd = None
 
         # Start persistent playback worker
@@ -139,27 +140,41 @@ class ALSAAudioSink(BaseAudioSink):
                     logger.debug("sounddevice playback failed (%s); attempting aplay fallback", e)
                     played = False
 
-            # Option B: Direct ALSA hardware aplay execution with wait() to prevent zombies
+            # Option B: Direct hardware playback execution (aplay / pw-play) with wait() to prevent zombies
             if not played:
                 try:
                     int16_samples = (np.clip(pcm_data, -1.0, 1.0) * 32767).astype(np.int16)
-                    cmd = ["aplay", "-D", self.device, "-r", str(sample_rate), "-f", "S16_LE", "-c", "2", "-q"]
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    raw_bytes = int16_samples.tobytes()
                     duration_s = len(pcm_data) / max(sample_rate, 1)
                     timeout = max(0.5, duration_s * 2.0)
-                    try:
-                        proc.communicate(input=int16_samples.tobytes(), timeout=timeout)
-                    except subprocess.TimeoutExpired:
-                        logger.warning("aplay playback timed out after %.2fs; killing PID %d", timeout, proc.pid)
-                        proc.kill()
-                        proc.wait(timeout=0.5)
+
+                    candidates = [
+                        ["aplay", "-D", self.device, "-r", str(sample_rate), "-f", "S16_LE", "-c", "2", "-q"],
+                        ["pw-play", "--rate", str(sample_rate), "--channels", "2", "--format", "s16", "-"],
+                        ["aplay", "-r", str(sample_rate), "-f", "S16_LE", "-c", "2", "-q"],
+                    ]
+                    for cmd in candidates:
+                        if not shutil.which(cmd[0]):
+                            continue
+                        try:
+                            proc = subprocess.Popen(
+                                cmd,
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            try:
+                                proc.communicate(input=raw_bytes, timeout=timeout)
+                                if proc.returncode == 0:
+                                    played = True
+                                    break
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait(timeout=0.5)
+                        except Exception:
+                            continue
                 except Exception as e:
-                    logger.debug("aplay direct execution failed for device %s: %s", self.device, e)
+                    logger.debug("hardware playback failed for device %s: %s", self.device, e)
 
             self.audio_queue.task_done()
 

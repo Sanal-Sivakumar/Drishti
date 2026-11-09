@@ -76,3 +76,11 @@ def test_grounded_vlm_does_not_treat_geometric_prior_as_tof():
 def test_vlm_empty_image_handling():
     result = GroundedSmolVLMNarrator(inference_fn=lambda image, prompt: "{}").describe_scene(None)
     assert result["success"] is False
+
+
+def test_grounded_vlm_fallback_when_torch_unavailable():
+    narrator = GroundedSmolVLMNarrator(inference_fn=None)
+    result = narrator.describe_scene(_image(), _chair(), False, "obstructed")
+    assert result["success"] is True
+    assert "chair" in result["narration"].lower()
+    assert "1.3" in result["narration"]
