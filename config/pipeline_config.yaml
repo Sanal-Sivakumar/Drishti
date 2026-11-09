@@ -44,7 +44,7 @@ perception:
       car: 1.50
 
   currency:
-    confidence_threshold: 0.55
+    confidence_threshold: 0.65
     supported_denominations: [10, 20, 50, 100, 200, 500]
 
   spatial_audio:
@@ -83,17 +83,17 @@ cognitive:
       - hin
       - tam
       - mal
-    min_confidence: 60.0
+    min_confidence: 40.0
     unicode_normalization: "NFC"
 
   scene_narrator:
     model_name: "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
     model_path: "models/smolvlm2-500m"
     local_files_only: true
-    max_output_tokens: 96
+    max_output_tokens: 36
     temperature: 0.0
-    timeout_s: 12.0
-    max_image_edge: 512
+    timeout_s: 25.0
+    max_image_edge: 384
     prompt_template: >
       Describe the camera image naturally for a blind user using only the trusted
       sensor facts supplied in the prompt for hazards, direction, path status,

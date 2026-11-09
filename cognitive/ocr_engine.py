@@ -17,7 +17,7 @@ class MultilingualOCREngine:
     def __init__(
         self,
         languages: Optional[List[str]] = None,
-        min_confidence: float = 60.0,
+        min_confidence: float = 40.0,
         unicode_normalization: str = "NFC",
         synthetic_mode: bool = False,
     ) -> None:
@@ -26,6 +26,13 @@ class MultilingualOCREngine:
         self.unicode_normalization = unicode_normalization
         self.synthetic_mode = synthetic_mode
         self.pytesseract = None
+        self.rapid_ocr = None
+
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            self.rapid_ocr = RapidOCR()
+        except Exception:
+            self.rapid_ocr = None
 
         try:
             import pytesseract
@@ -95,6 +102,34 @@ class MultilingualOCREngine:
         if image is None or image.size == 0:
             return {"text": "", "script": "none", "confidence": 0.0, "lines": []}
 
+        # 1. Fast neural ONNX-based OCR via RapidOCR
+        if self.rapid_ocr is not None:
+            try:
+                results, _ = self.rapid_ocr(image)
+                if results:
+                    extracted_words = []
+                    confidences = []
+                    thresh = self.min_confidence if self.min_confidence <= 1.0 else (self.min_confidence / 100.0)
+                    for item in results:
+                        txt = str(item[1]).strip()
+                        score = float(item[2])
+                        if txt and score >= thresh:
+                            extracted_words.append(txt)
+                            confidences.append(score)
+                    if extracted_words:
+                        raw_text = " ".join(extracted_words)
+                        clean_text = self.normalize_indic_text(raw_text)
+                        mean_conf = float(np.mean(confidences)) if confidences else 0.0
+                        return {
+                            "text": clean_text,
+                            "script": "multilingual_indic",
+                            "confidence": round(mean_conf, 2),
+                            "lines": extracted_words,
+                        }
+            except Exception:
+                pass
+
+        # 2. Tesseract OCR Fallback
         preprocessed = self.preprocess_image_for_ocr(image)
 
         if self.pytesseract is not None:

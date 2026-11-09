@@ -196,5 +196,21 @@ def test_identify_currency_ten_rupees_handheld():
     assert "bbox" in res
 
 
+def test_wood_table_surface_false_positive_rejected():
+    """Verify that a wooden desk/table surface with grain and brown hue is rejected."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.65)
+    # Simulated wooden table frame: brown hue ~25 deg, saturation ~0.7, value ~0.4
+    frame = np.full((480, 640, 3), [30, 60, 100], dtype=np.uint8)
+    # Add mild wood grain noise across the surface
+    rng = np.random.RandomState(42)
+    noise = rng.randint(-8, 8, (480, 640, 3)).astype(np.int16)
+    frame = np.clip(frame.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+    res = rec.identify_currency(frame, color_order="BGR")
+    assert res["denomination"] is None
+    assert "No note" in res["spoken_name"]
+
+
+
 
 

@@ -19,14 +19,14 @@ class IndianCurrencyRecognizer:
             "dimensions_mm": (123, 63),
             "aspect_ratio": 1.95,
             "hue_center_deg": 20.0,  # Chocolate Brown
-            "hue_tolerance": 20.0,
+            "hue_tolerance": 16.0,
         },
         20: {
             "name": "Twenty rupees",
             "dimensions_mm": (129, 63),
             "aspect_ratio": 2.05,
             "hue_center_deg": 42.0,  # Greenish Yellow
-            "hue_tolerance": 12.0,
+            "hue_tolerance": 10.0,
         },
         50: {
             "name": "Fifty rupees",
@@ -60,7 +60,7 @@ class IndianCurrencyRecognizer:
 
     def __init__(
         self,
-        confidence_threshold: float = 0.55,
+        confidence_threshold: float = 0.65,
         supported_denominations: Optional[list[int]] = None,
     ) -> None:
         self.conf_thresh = confidence_threshold
@@ -185,6 +185,21 @@ class IndianCurrencyRecognizer:
                 "reason": "directional_texture",
             }
 
+        # Reject flat, unprinted surfaces (wooden desks, monochrome walls/furniture).
+        # Real banknotes feature sharp intaglio contrast, portrait, numerals, and watermarks.
+        if color_order.upper() == "BGR":
+            gray = 0.114 * crop_image[:, :, 0] + 0.587 * crop_image[:, :, 1] + 0.299 * crop_image[:, :, 2]
+        else:
+            gray = 0.299 * crop_image[:, :, 0] + 0.587 * crop_image[:, :, 1] + 0.114 * crop_image[:, :, 2]
+        gray_std = float(np.std(gray))
+        if gray_std < 5.0:
+            return {
+                "denomination": None,
+                "spoken_name": "No note detected",
+                "confidence": 0.0,
+                "reason": "flat_surface",
+            }
+
         # Verify paper-currency geometry with tilt/perspective tolerance.
         if bbox_aspect_ratio is not None:
             if bbox_aspect_ratio < 1.45 or bbox_aspect_ratio > 2.85:
@@ -197,12 +212,12 @@ class IndianCurrencyRecognizer:
 
         # 2. Chromatic Ink Distribution
         hsv = self.bgr_to_hsv_fast(crop_image, color_order=color_order)
-        sat_mask = (hsv[:, :, 1] > 0.16) & (hsv[:, :, 2] > 0.14)
+        sat_mask = (hsv[:, :, 1] > 0.18) & (hsv[:, :, 2] > 0.15)
         sat_count = int(np.sum(sat_mask))
         total_pixels = crop_image.shape[0] * crop_image.shape[1]
 
-        # Banknotes must have significant ink saturation across at least 6% of area
-        if sat_count < max(20, int(0.06 * total_pixels)):
+        # Banknotes must have significant ink saturation across at least 10% of area
+        if sat_count < max(25, int(0.10 * total_pixels)):
             return {
                 "denomination": None,
                 "spoken_name": "No note detected",
@@ -317,6 +332,32 @@ class IndianCurrencyRecognizer:
             approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
             if len(approx) > 16:
                 continue
+
+            # Boundary contrast verification against surrounding background:
+            # A real banknote has distinct contrast against its immediate border.
+            # Internal grain/shadows within the same surface have near-zero color delta.
+            margin = 6
+            y_in_0, y_in_1 = by + 2, by + bh - 2
+            x_in_0, x_in_1 = bx + 2, bx + bw - 2
+            if y_in_1 > y_in_0 and x_in_1 > x_in_0:
+                inner_region = frame[y_in_0:y_in_1, x_in_0:x_in_1]
+                outer_strips = []
+                if by >= margin:
+                    outer_strips.append(frame[by - margin:by, bx:bx + bw].reshape(-1, 3))
+                if by + bh + margin <= h:
+                    outer_strips.append(frame[by + bh:by + bh + margin, bx:bx + bw].reshape(-1, 3))
+                if bx >= margin:
+                    outer_strips.append(frame[by:by + bh, max(0, bx - margin):bx].reshape(-1, 3))
+                if bx + bw + margin <= w:
+                    outer_strips.append(frame[by:by + bh, bx + bw:min(w, bx + bw + margin)].reshape(-1, 3))
+
+                if outer_strips:
+                    outer_pixels = np.concatenate(outer_strips, axis=0)
+                    mean_inner = np.mean(inner_region.astype(float), axis=(0, 1))
+                    mean_outer = np.mean(outer_pixels.astype(float), axis=0)
+                    color_delta = float(np.linalg.norm(mean_inner - mean_outer))
+                    if color_delta < 12.0:
+                        continue
 
             roi = frame[by:by + bh, bx:bx + bw]
             res = self.classify_banknote(roi, bbox_aspect_ratio=ar, color_order=color_order)

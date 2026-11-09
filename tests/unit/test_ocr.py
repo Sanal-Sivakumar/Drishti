@@ -73,3 +73,18 @@ def test_ocr_production_no_hardcoded_fallback():
     assert result["text"] != "Drishti Pharmacy 500mg"
 
 
+def test_rapid_ocr_real_text_extraction():
+    """Verify neural RapidOCR extracts real printed text from an image."""
+    import cv2
+    ocr = MultilingualOCREngine(synthetic_mode=False)
+    if ocr.rapid_ocr is None:
+        pytest.skip("RapidOCR not installed")
+
+    img = np.full((100, 350, 3), 255, dtype=np.uint8)
+    cv2.putText(img, "Drishti Wearable", (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    res = ocr.extract_text(img)
+    assert "Drishti" in res["text"] or "Wearable" in res["text"]
+    assert res["confidence"] > 0.4
+
+
+

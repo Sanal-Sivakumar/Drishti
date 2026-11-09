@@ -549,15 +549,17 @@ def main() -> None:
                 codes = ", ".join(x.get("code", "UNKNOWN") for x in issues) or fast.get("error", "unknown")
                 print(f"Cycle {cycle_count:<5} | NAVIGATION NOT READY | {codes}")
 
-            # Continuous currency detected
+            # Cognitive results (Scene narration, Banknote, OCR)
             for cognitive in res.get("cognitive_results", []):
                 if "narration" in cognitive:
                     print(f"  >>> [SCENE NARRATION] Spoken: \"{cognitive['narration']}\"")
                 elif cognitive.get("currency", {}).get("denomination") is not None:
                     c = cognitive["currency"]
                     print(f"  >>> [CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c['confidence']:.2f})")
-                elif "ocr" in cognitive:
-                    print(f"  >>> [OCR] Spoken: \"{cognitive['ocr'].get('text') or 'No clear text detected.'}\"")
+                elif "ocr" in cognitive and cognitive["ocr"].get("text"):
+                    print(f"  >>> [OCR] Spoken: \"{cognitive['ocr'].get('text')}\"")
+                elif cognitive.get("success") is False:
+                    print(f"  >>> [READING/CURRENCY] Spoken: \"No banknote or text detected.\"")
 
             # 30 FPS pacing yield
             time.sleep(0.02)

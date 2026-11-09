@@ -186,17 +186,65 @@ class DrishtiMasterPipeline:
             )
             return {**output, "faces_redacted": redacted["faces_redacted"]}
 
-        currency = self.currency_classifier.identify_currency(frame, color_order="BGR")
-        if currency.get("denomination") is not None:
-            if self.speech_enabled:
-                self.speech_service.speak(currency["spoken_name"], play_audio=True)
-            return {"success": True, "currency": currency}
         if task.kind == "continuous_currency":
+            currency = self.currency_classifier.identify_currency(frame, color_order="BGR")
+            if currency.get("denomination") is not None:
+                if self.speech_enabled:
+                    self.speech_service.speak(currency["spoken_name"], play_audio=True)
             return {"success": True, "currency": currency}
-        ocr = self.ocr_engine.extract_text(frame)
+
+        # Handle on-demand Button 2 / keyboard 'C' (reading or currency)
+        # In simulation / synthetic mode: evaluate immediately on the test frame
+        if self.mode == "simulation" or getattr(self.camera, "is_synthetic", False):
+            currency = self.currency_classifier.identify_currency(frame, color_order="BGR")
+            if currency.get("denomination") is not None:
+                if self.speech_enabled:
+                    self.speech_service.speak(currency["spoken_name"], play_audio=True)
+                return {"success": True, "currency": currency}
+            ocr = self.ocr_engine.extract_text(frame)
+            if self.speech_enabled:
+                self.speech_service.speak(ocr.get("text") or "No clear text detected.", play_audio=True)
+            return {"success": True, "ocr": ocr}
+
+        # Production active scanning window: inspect live frames for up to 4.0 seconds
+        scan_deadline = time.time() + 4.0
+        best_ocr: Optional[Dict[str, Any]] = None
+        last_check_time = 0.0
+
+        while time.time() < scan_deadline:
+            now = time.time()
+            if now - last_check_time >= 0.20:
+                last_check_time = now
+                live_frame = self._frame()
+                if live_frame is None:
+                    live_frame = frame
+
+                if live_frame is not None:
+                    # 1. Banknote check
+                    curr = self.currency_classifier.identify_currency(live_frame, color_order="BGR")
+                    if curr.get("denomination") is not None:
+                        if self.speech_enabled:
+                            self.speech_service.speak(curr["spoken_name"], play_audio=True)
+                        return {"success": True, "currency": curr}
+
+                    # 2. OCR check
+                    ocr_res = self.ocr_engine.extract_text(live_frame)
+                    txt = ocr_res.get("text", "").strip()
+                    if txt and len(txt) >= 3:
+                        if best_ocr is None or len(txt) > len(best_ocr.get("text", "")):
+                            best_ocr = ocr_res
+                        if ocr_res.get("confidence", 0.0) >= 0.70 and len(txt) >= 8:
+                            break
+            time.sleep(0.04)
+
+        if best_ocr is not None and best_ocr.get("text"):
+            if self.speech_enabled:
+                self.speech_service.speak(best_ocr["text"], play_audio=True)
+            return {"success": True, "ocr": best_ocr}
+
         if self.speech_enabled:
-            self.speech_service.speak(ocr.get("text") or "No clear text detected.", play_audio=True)
-        return {"success": True, "ocr": ocr}
+            self.speech_service.speak("No banknote or text detected.", play_audio=True)
+        return {"success": False, "ocr": {"text": "", "script": "none", "confidence": 0.0, "lines": []}}
 
     def _collect_cognitive_results(self) -> list[Dict[str, Any]]:
         results = []
@@ -229,6 +277,8 @@ class DrishtiMasterPipeline:
 
         if self.trigger_input.poll_trigger(button_id=1):
             frame = self._frame()
+            if self.speech_enabled and self.mode != "simulation":
+                self.speech_service.speak("Analyzing scene...", play_audio=True)
             queued = frame is not None and self.cognitive_worker.submit(
                 "narration",
                 {
@@ -242,6 +292,8 @@ class DrishtiMasterPipeline:
 
         if self.trigger_input.poll_trigger(button_id=2):
             frame = self._frame()
+            if self.speech_enabled and self.mode != "simulation":
+                self.speech_service.speak("Scanning for banknote or text...", play_audio=True)
             queued = frame is not None and self.cognitive_worker.submit("reading_or_currency", {"frame": frame})
             cycle_result["events"].append({"type": "READING_OR_CURRENCY_TRIGGERED", "queued": queued})
 
