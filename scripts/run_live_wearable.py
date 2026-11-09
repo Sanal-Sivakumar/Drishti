@@ -109,6 +109,7 @@ def build_hardware_stack(
     serial_port: Optional[str] = None,
     camera_index: Optional[int] = None,
     no_esp32: bool = False,
+    enable_keyboard: bool = False,
 ):
     """Instantiate appropriate HAL drivers based on host environment and config files."""
     if hardware_mode == "auto":
@@ -166,9 +167,10 @@ def build_hardware_stack(
                 esp_trigger = ESP32ButtonTrigger(esp_sensor.link)
 
             if esp_trigger is not None:
-                print("    -> Tactile Input: ESP32 buttons (GPIO32=Narration, GPIO33=Currency/OCR)")
+                print("    -> Tactile Input: Physical ESP32 push buttons (Button 1: GPIO32, Button 2: GPIO33, Button 3: GPIO25)")
                 trigger_input = esp_trigger
             else:
+                print("    -> Tactile Input: Synthetic trigger (no physical buttons detected)")
                 trigger_input = SyntheticTriggerInput()
         else:
             i2c_bus = dist_cfg.get("i2c_bus", 1)
@@ -192,6 +194,13 @@ def build_hardware_stack(
             except Exception:
                 print("    [!] GPIO library unavailable. Falling back to synthetic trigger input.")
                 trigger_input = SyntheticTriggerInput()
+
+        if enable_keyboard:
+            print("    -> Keyboard shortcuts enabled (N: Narration, C: Currency, T: Text, Q: Quit)")
+            synthetic_trigger = SyntheticTriggerInput()
+            kb_thread = KeyboardTriggerThread(synthetic_trigger)
+            kb_thread.start()
+            trigger_input = CompositeTriggerInput([trigger_input, synthetic_trigger])
 
         alsa_dev = audio_cfg.get("device_name", "default")
         print(f"    -> Audio Sink: ALSA direct device {alsa_dev} (Bone-Conduction Transducer)")
@@ -269,18 +278,18 @@ def build_hardware_stack(
             esp_trigger = None
 
         if esp_trigger is not None:
-            print("    -> Tactile Input: ESP32 buttons (GPIO32=Narration, GPIO33=Currency, GPIO25=Text) + N/C/T keys")
+            print("    -> Tactile Input: Physical ESP32 push buttons (Button 1: GPIO32, Button 2: GPIO33, Button 3: GPIO25)")
+            trigger_input: BaseTriggerInput = esp_trigger
         else:
-            print("    -> Tactile Input: Interactive Terminal Keyboard (N: Narration, C: Currency, T: Text, Q: Quit)")
+            print("    -> Tactile Input: Synthetic trigger (no physical buttons detected)")
+            trigger_input = SyntheticTriggerInput()
 
-        synthetic_trigger = SyntheticTriggerInput()
-        kb_thread = KeyboardTriggerThread(synthetic_trigger)
-        kb_thread.start()
-
-        if esp_trigger is not None:
-            trigger_input: BaseTriggerInput = CompositeTriggerInput([esp_trigger, synthetic_trigger])
-        else:
-            trigger_input = synthetic_trigger
+        if enable_keyboard:
+            print("    -> Keyboard shortcuts enabled (N: Narration, C: Currency, T: Text, Q: Quit)")
+            synthetic_trigger = SyntheticTriggerInput()
+            kb_thread = KeyboardTriggerThread(synthetic_trigger)
+            kb_thread.start()
+            trigger_input = CompositeTriggerInput([trigger_input, synthetic_trigger])
 
         alsa_dev = audio_cfg.get("device_name", "default")
         print(f"    -> Audio Sink: Audio output on {alsa_dev}")
@@ -411,6 +420,12 @@ def main() -> None:
         default="127.0.0.1",
         help="Bind address for the debug viewer (default: localhost; use 0.0.0.0 for phone access)",
     )
+    parser.add_argument(
+        "--enable-keyboard",
+        action="store_true",
+        default=False,
+        help="Enable optional interactive terminal keyboard shortcuts for testing (default: disabled, physical tactile buttons only)",
+    )
     args = parser.parse_args()
 
     if args.continuous_currency is None:
@@ -434,6 +449,7 @@ def main() -> None:
         serial_port=args.serial_port,
         camera_index=args.camera_index,
         no_esp32=args.no_esp32,
+        enable_keyboard=args.enable_keyboard,
     )
     
     # 3. Configure and Connect MQTT Telemetry
@@ -505,12 +521,20 @@ def main() -> None:
     # 4. Startup Vocal Announcement
     if not args.no_speech:
         print("[*] Broadcasting startup chime...")
-        greeting = "Drishti online. Continuous obstacle guidance active. Press N for narration, C for currency, T for text."
+        greeting = (
+            "Drishti online. Continuous obstacle guidance active. "
+            "Ready for button input: Button 1 for narration, Button 2 for currency, Button 3 for text."
+        )
         pipeline.speech_service.speak(greeting, play_audio=True)
 
     print("\n" + "=" * 80)
     print("  SYSTEM RUNNING CONTINUOUSLY (Press Ctrl+C to terminate)")
-    print("  Controls: [N] = Narrate Scene | [C] = Currency | [T] = Read Text | [Q] = Quit")
+    print("  Hardware Tactile Buttons:")
+    print("    [Button 1] = Scene Narration (Gemini Vision)")
+    print("    [Button 2] = Banknote Identification (Gemini Vision)")
+    print("    [Button 3] = Multilingual Text Reading (Gemini Vision)")
+    if args.enable_keyboard:
+        print("  Keyboard Shortcuts: [N] = Narrate | [C] = Currency | [T] = Text | [Q] = Quit")
     print("=" * 80 + "\n")
 
 

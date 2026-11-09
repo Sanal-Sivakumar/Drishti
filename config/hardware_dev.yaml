@@ -15,7 +15,7 @@ distance_sensor:
   # No production fallback. Use --hardware synthetic for explicit simulation.
 trigger_input:
   backend: esp32_buttons
-  keyboard_fallback: true
+  keyboard_fallback: false
 audio_output:
   backend: alsa
   device_name: default
