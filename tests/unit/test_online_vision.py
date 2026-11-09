@@ -211,3 +211,68 @@ def test_error_sanitization_removes_secrets():
     sanitized = OnlineVisionService.sanitize_error(err, secret=secret_key)
     assert secret_key not in sanitized
     assert "[REDACTED" in sanitized
+
+
+def test_currency_mismatched_spoken_name_is_ignored(monkeypatch):
+    """Verify that spoken_name from model is ignored and built exclusively from validated denomination."""
+    service = OnlineVisionService(synthetic_mode=False, api_key="sk-test-mock-key")
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    # Model returned 100 for denomination, but hallucinated/mismatched "Five hundred rupees" in spoken_name
+    monkeypatch.setattr(
+        service,
+        "_call_cloud_api",
+        lambda p, b, high_fidelity=False, **kwargs: {
+            "success": True,
+            "data": {
+                "denomination_inr": 100,
+                "confidence": "high",
+                "spoken_name": "Five hundred rupees",
+                "uncertain": False,
+            },
+        },
+    )
+    res = service.identify_currency(img)
+    assert res["currency"]["denomination"] == 100
+    assert res["currency"]["spoken_name"] == "One hundred rupees"
+    assert "Five hundred" not in res["currency"]["spoken_name"]
+
+
+def test_currency_rejects_medium_confidence(monkeypatch):
+    """Verify that only confidence=='high' is accepted, and medium confidence is rejected."""
+    service = OnlineVisionService(synthetic_mode=False, api_key="sk-test-mock-key")
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(
+        service,
+        "_call_cloud_api",
+        lambda p, b, high_fidelity=False, **kwargs: {
+            "success": True,
+            "data": {
+                "denomination_inr": 500,
+                "confidence": "medium",
+                "uncertain": False,
+            },
+        },
+    )
+    res = service.identify_currency(img)
+    assert res["currency"]["denomination"] is None
+    assert "No banknote clearly detected" in res["currency"]["spoken_name"]
+
+
+def test_env_overrides_provider_and_model(monkeypatch):
+    """Verify that DRISHTI_VISION_PROVIDER and DRISHTI_VISION_MODEL environment variables win over YAML."""
+    monkeypatch.setenv("DRISHTI_VISION_PROVIDER", "openai")
+    monkeypatch.setenv("DRISHTI_VISION_MODEL", "env-override-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-test12345")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyFake12345")
+
+    service = OnlineVisionService(
+        provider="auto",
+        gemini_model="yaml-gemini-model",
+        openai_model="yaml-openai-model",
+        synthetic_mode=True,
+        load_env=False,
+    )
+    assert service.provider == "openai"
+    assert service.model == "env-override-model"

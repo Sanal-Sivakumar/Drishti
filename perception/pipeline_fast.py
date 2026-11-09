@@ -174,8 +174,23 @@ class FastPerceptionPipeline:
         t_tof = (time.perf_counter() - t0) * 1000.0
         if self.mode != "simulation" and tof_dist_m is None:
             readiness.issues.append(
-                ReadinessIssue("RANGE_NO_VALID_SAMPLE", "No fresh, valid physical ToF sample is available.", critical=False)
+                ReadinessIssue("RANGE_NO_VALID_SAMPLE", "No fresh, valid physical ToF sample is available.", critical=True)
             )
+            return {
+                "success": False,
+                "error": "Physical ToF distance unavailable; navigation output suppressed",
+                "path_state": "unknown",
+                "readiness": readiness.as_dict(),
+                "obstacles": [],
+                "obstacles_count": 0,
+                "primary_hazard": None,
+                "audio_synthesized": False,
+                "latency_ms": {
+                    "camera_read": round(t_cam, 2),
+                    "tof_read": round(t_tof, 2),
+                    "total_cycle": round((time.perf_counter() - t_start) * 1000.0, 2),
+                },
+            }
 
         # Issue a centre warning from physical ToF before waiting for YOLO.
         urgent_audio_synthesized = False
@@ -224,6 +239,8 @@ class FastPerceptionPipeline:
         primary_hazard: Optional[Dict[str, Any]] = None
         audio_synthesized = urgent_audio_synthesized
 
+        authoritative = readiness.navigation_authoritative or self.mode == "simulation"
+
         if fused_obstacles:
             # Sort by distance (closest obstacle takes highest priority)
             fused_obstacles.sort(key=lambda o: o["distance_m"])
@@ -231,26 +248,33 @@ class FastPerceptionPipeline:
 
             dist_m = primary_hazard["distance_m"]
             azimuth_rad = primary_hazard["azimuth_rad"]
+            fusion_source = primary_hazard.get("fusion_source", "")
 
-            # Obey biological sonar Pulse Repetition Frequency (PRF)
-            _, pulse_rate_hz = self.audio_synthesizer.compute_pitch_and_pulse_rate(dist_m)
-            min_interval_s = 1.0 / max(pulse_rate_hz, 0.5)
-            now = time.time()
+            # If readiness is degraded/unauthoritative, suppress inferred-distance audio pings (only physical laser fusion / tof_only allowed)
+            can_synthesize_audio = authoritative or fusion_source in ("tof_laser_fusion", "tof_only")
 
-            if (now - self.last_ping_time) >= min_interval_s:
-                stereo_pcm = self.audio_synthesizer.synthesize_obstacle_ping(
-                    azimuth_rad=azimuth_rad, distance_m=dist_m, duration_s=0.06
-                )
-                self.audio_sink.play_pcm(stereo_pcm, sample_rate=self.audio_synthesizer.sample_rate)
-                audio_synthesized = True
-                self.last_ping_time = now
+            if can_synthesize_audio:
+                # Obey biological sonar Pulse Repetition Frequency (PRF)
+                _, pulse_rate_hz = self.audio_synthesizer.compute_pitch_and_pulse_rate(dist_m)
+                min_interval_s = 1.0 / max(pulse_rate_hz, 0.5)
+                now = time.time()
 
+                if (now - self.last_ping_time) >= min_interval_s:
+                    stereo_pcm = self.audio_synthesizer.synthesize_obstacle_ping(
+                        azimuth_rad=azimuth_rad, distance_m=dist_m, duration_s=0.06
+                    )
+                    self.audio_sink.play_pcm(stereo_pcm, sample_rate=self.audio_synthesizer.sample_rate)
+                    audio_synthesized = True
+                    self.last_ping_time = now
 
         t_audio = (time.perf_counter() - t0) * 1000.0
         t_total = (time.perf_counter() - t_start) * 1000.0
 
-        authoritative = readiness.navigation_authoritative or self.mode == "simulation"
-        path_state = "obstructed" if fused_obstacles else ("clear" if authoritative else "unknown")
+        if not authoritative:
+            # Force path_state="unknown" whenever readiness is degraded/unauthoritative
+            path_state = "unknown"
+        else:
+            path_state = "obstructed" if fused_obstacles else "clear"
         return {
             "success": True,
             "path_state": path_state,

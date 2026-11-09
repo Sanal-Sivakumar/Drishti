@@ -17,7 +17,7 @@ Drishti is an experimental, offline-first assistive-perception prototype for Ras
 
 ## Status at this commit
 
-The hybrid edge-cloud software architecture is fully implemented, with all 95 automated unit and integration tests passing. Continuous 3D obstacle avoidance (YOLOv8n ONNX + VL53L0X/VL53L1X ToF + binaural audio sonification) runs 100% offline at <35 ms per cycle. Visual cognition (Scene Narration, Indian Banknote Identification, and Multilingual Indic OCR) is handled via a cloud Online Vision API (OpenAI GPT-4o-mini or Google Gemini 2.5 Flash) triggered on-demand via a 3-button hardware layout, with local Gaussian face and license plate anonymization prior to transmission and local Piper neural TTS for playback.
+The hybrid edge-cloud software architecture is fully implemented, with all automated unit and integration tests passing. Continuous 3D obstacle avoidance (YOLOv8n ONNX + VL53L0X/VL53L1X ToF + binaural audio sonification) runs 100% offline at <35 ms per cycle. Visual cognition (Scene Narration, Indian Banknote Identification, and Multilingual Indic OCR) is handled via a cloud Online Vision API (Google Gemini 3.1 Flash-Lite or OpenAI GPT-4o-mini) triggered on-demand via a 3-button hardware layout, with local Gaussian face and license plate anonymization prior to transmission and local Piper neural TTS for playback.
 
 A fresh Git checkout is configured safely: local model weights for offline perception (`models/yolov8n.onnx` and `models/piper/`) are provisioned via `scripts/download_models.py`, while cloud vision keys (`OPENAI_API_KEY` or `GEMINI_API_KEY`) are read securely from local `.env` (never committed or exposed).
 
@@ -113,7 +113,7 @@ Laptop production probing (navigation stays not-ready without a physical ToF sou
 python scripts/run_live_wearable.py --hardware laptop --serial-port /dev/drishti-tof --viewer
 ```
 
-Controls: `N` requests grounded scene narration (Button 1); `C` requests Indian banknote identification (Button 2); `T` requests multilingual text reading (Button 3); `Q` exits. Continuous banknote scanning is opt-in with `--continuous-currency`.
+Controls: Visual cognition is triggered on-demand via 3 physical tactile buttons (Button 1: Scene Narration, Button 2: Banknote Identification, Button 3: Multilingual Text Reading). Interactive terminal keyboard shortcuts (`N`, `C`, `T`, `Q`) can be enabled for test benches using `--enable-keyboard`. Continuous banknote scanning is opt-in with `--continuous-currency`.
 
 For the current laptop + ESP32 workflow, stable device paths, Git practices, verification commands, and a reusable AI-session prompt are documented in [`docs/LAPTOP_WORKFLOW.md`](docs/LAPTOP_WORKFLOW.md).
 

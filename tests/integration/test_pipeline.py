@@ -97,7 +97,20 @@ def test_pipeline_all_cloud_tasks_pass_redacted_frame(monkeypatch):
         telemetry_client=telemetry,
     )
 
+    SENTINEL_PIXEL = np.array([123, 45, 67], dtype=np.uint8)
+
+    def mock_anonymize(frame, extra_face_boxes=None, vehicle_boxes=None):
+        redacted = frame.copy()
+        redacted[0, 0] = SENTINEL_PIXEL
+        return {"image": redacted, "faces_redacted": 1, "plates_redacted": 0}
+
+    monkeypatch.setattr(pipeline.anonymizer, "anonymize_frame", mock_anonymize)
+
     received_frames = []
+
+    def mock_narration(img, obs, **kwargs):
+        received_frames.append(("narration", img))
+        return {"success": True, "narration": "A scene"}
 
     def mock_currency(img):
         received_frames.append(("currency", img))
@@ -107,30 +120,33 @@ def test_pipeline_all_cloud_tasks_pass_redacted_frame(monkeypatch):
         received_frames.append(("text", img))
         return {"success": True, "text": "Drishti 500mg", "spoken_name": "Drishti 500mg"}
 
-    def mock_narration(img, obs, **kwargs):
-        received_frames.append(("narration", img))
-        return {"success": True, "narration": "A scene"}
-
+    monkeypatch.setattr(pipeline.online_vision, "describe_scene", mock_narration)
     monkeypatch.setattr(pipeline.online_vision, "identify_currency", mock_currency)
     monkeypatch.setattr(pipeline.online_vision, "read_text", mock_text)
-    monkeypatch.setattr(pipeline.online_vision, "describe_scene", mock_narration)
 
-    # 1. Trigger currency
-    trigger.inject_trigger(button_id=2)
+    # 1. Trigger narration (Button 1)
+    trigger.inject_trigger(button_id=1)
     pipeline.step()
     pipeline.wait_for_cognition()
     assert len(received_frames) == 1
-    assert received_frames[0][0] == "currency"
-    # Verify received frame is an ndarray with matching dimensions
-    assert isinstance(received_frames[0][1], np.ndarray)
+    assert received_frames[0][0] == "narration"
+    assert np.array_equal(received_frames[0][1][0, 0], SENTINEL_PIXEL)
 
-    # 2. Trigger text
-    trigger.inject_trigger(button_id=3)
+    # 2. Trigger currency (Button 2)
+    trigger.inject_trigger(button_id=2)
     pipeline.step()
     pipeline.wait_for_cognition()
     assert len(received_frames) == 2
-    assert received_frames[1][0] == "text"
-    assert isinstance(received_frames[1][1], np.ndarray)
+    assert received_frames[1][0] == "currency"
+    assert np.array_equal(received_frames[1][1][0, 0], SENTINEL_PIXEL)
+
+    # 3. Trigger text (Button 3)
+    trigger.inject_trigger(button_id=3)
+    pipeline.step()
+    pipeline.wait_for_cognition()
+    assert len(received_frames) == 3
+    assert received_frames[2][0] == "text"
+    assert np.array_equal(received_frames[2][1][0, 0], SENTINEL_PIXEL)
 
     pipeline.shutdown()
 

@@ -17,80 +17,17 @@ import json
 import os
 from pathlib import Path
 import re
-import socket
 import time
 from typing import Any, Callable, Dict, List, Optional, Set
 import cv2
 import numpy as np
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.connection import HTTPSConnection
-from urllib3.connectionpool import HTTPSConnectionPool
 
 from config.logging_config import get_logger
 
 logger = get_logger("cognitive.online_vision")
 
 VALID_INR_DENOMINATIONS: Set[int] = {10, 20, 50, 100, 200, 500}
-
-
-def _ipv4_first_create_connection(address, *args, **kwargs):
-    """Resolve DNS with IPv4-first ordering and transparent IPv6 fallback."""
-    host, port = address
-    if host.startswith("["):
-        host = host.strip("[]")
-
-    infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
-    v4 = [r for r in infos if r[0] == socket.AF_INET]
-    v6 = [r for r in infos if r[0] == socket.AF_INET6]
-    other = [r for r in infos if r[0] not in (socket.AF_INET, socket.AF_INET6)]
-
-    err = None
-    for res in v4 + v6 + other:
-        af, socktype, proto, canonname, sa = res
-        sock = None
-        try:
-            sock = socket.socket(af, socktype, proto)
-            if "socket_options" in kwargs and kwargs["socket_options"]:
-                for opt in kwargs["socket_options"]:
-                    sock.setsockopt(*opt)
-            if "timeout" in kwargs and kwargs["timeout"] is not None:
-                sock.settimeout(min(float(kwargs["timeout"]), 4.0))
-            if "source_address" in kwargs and kwargs["source_address"]:
-                sock.bind(kwargs["source_address"])
-            sock.connect(sa)
-            if "timeout" in kwargs and kwargs["timeout"] is not None:
-                sock.settimeout(kwargs["timeout"])
-            return sock
-        except socket.error as e:
-            err = e
-            if sock is not None:
-                sock.close()
-    if err is not None:
-        raise err
-    raise socket.error("getaddrinfo returns an empty list")
-
-
-class _IPv4FirstHTTPSConnection(HTTPSConnection):
-    def _new_conn(self):
-        extra_args = {}
-        if self.source_address:
-            extra_args["source_address"] = self.source_address
-        if self.socket_options:
-            extra_args["socket_options"] = self.socket_options
-        return _ipv4_first_create_connection(
-            (self.host, self.port), self.timeout, **extra_args
-        )
-
-
-class _IPv4FirstAdapter(HTTPAdapter):
-    """Session adapter that prioritizes IPv4 to prevent IPv6 timeouts without global patching."""
-
-    def get_connection(self, url, proxies=None):
-        conn = super().get_connection(url, proxies=proxies)
-        if isinstance(conn, HTTPSConnectionPool):
-            conn.ConnectionCls = _IPv4FirstHTTPSConnection
-        return conn
 
 
 def load_env_file(env_path: Optional[str | Path] = None) -> None:
@@ -134,22 +71,24 @@ class OnlineVisionService:
         self.mock_fn = mock_fn
         self.timeout_s = timeout_s or 12.0
 
-        # Session-scoped adapter with IPv4 priority & IPv6 fallback
+        # Standard requests session
         self.session = requests.Session()
-        adapter = _IPv4FirstAdapter()
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
 
-        # Provider resolution (normalize 'auto' or empty to None)
-        raw_provider = (provider or os.environ.get("DRISHTI_VISION_PROVIDER", "")).strip().lower()
-        if raw_provider in ("auto", ""):
-            raw_provider = None
+        # Provider resolution: environment variable override takes precedence
+        env_provider = os.environ.get("DRISHTI_VISION_PROVIDER", "").strip().lower()
+        arg_provider = (provider or "").strip().lower()
+        if env_provider and env_provider != "auto":
+            selected_provider = env_provider
+        elif arg_provider and arg_provider != "auto":
+            selected_provider = arg_provider
+        else:
+            selected_provider = None
 
         has_gemini = bool(os.environ.get("GEMINI_API_KEY", "").strip())
         has_openai = bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
-        if raw_provider in ("gemini", "openai"):
-            self.provider = raw_provider
+        if selected_provider in ("gemini", "openai"):
+            self.provider = selected_provider
         elif has_gemini and not has_openai:
             self.provider = "gemini"
         elif has_openai and not has_gemini:
@@ -159,14 +98,21 @@ class OnlineVisionService:
         else:
             self.provider = "openai"
 
+        # Model resolution: environment variable override takes precedence
         env_model = os.environ.get("DRISHTI_VISION_MODEL", "").strip()
+        if env_model:
+            self.model = env_model
+        elif model:
+            self.model = model
+        elif self.provider == "gemini":
+            self.model = gemini_model or "gemini-3.1-flash-lite"
+        else:
+            self.model = openai_model or "gpt-4o-mini"
+
         if self.provider == "gemini":
             self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "").strip()
-            self.model = model or gemini_model or (env_model if env_model else "gemini-3.1-flash-lite")
         else:
-            self.provider = "openai"
             self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "").strip()
-            self.model = model or openai_model or (env_model if env_model else "gpt-4o-mini")
 
         self.has_key = bool(self.api_key and len(self.api_key.strip()) > 5)
 
@@ -303,8 +249,8 @@ class OnlineVisionService:
                 return {"success": True, "narration": text, "structured": {"speech": text}}
             return {
                 "success": True,
-                "narration": "Path is clear with open space ahead.",
-                "structured": {"speech": "Path is clear with open space ahead.", "visual_context": ["room"], "uncertain": False},
+                "narration": "You are facing an open indoor room with a table and chairs.",
+                "structured": {"speech": "You are facing an open indoor room with a table and chairs.", "visual_context": ["room", "table", "chair"], "uncertain": False},
             }
 
         facts = []
@@ -376,24 +322,30 @@ class OnlineVisionService:
             }
 
         prompt = (
-            "You are the currency identification assistant for the Drishti wearable.\n"
-            "Examine the image to identify any Indian Rupee (INR) paper banknote (Mahatma Gandhi New Series: 10, 20, 50, 100, 200, 500).\n"
+            "You are the expert Indian Rupee (INR) currency recognition assistant for the Drishti wearable.\n"
+            "Examine the image carefully to identify any Indian Rupee paper banknote (Mahatma Gandhi series: 10, 20, 50, 100, 200, 500 rupees).\n"
             "RULES:\n"
-            "1. Inspect the denominational numerals (e.g. 10, 20, 50, 100, 200, 500), Gandhi portrait, color, and reserve bank text.\n"
-            "2. If no banknote is visible, or if the note is heavily blurred, obscured, or ambiguous, DO NOT GUESS. "
+            "1. Inspect the denominational numerals (10, 20, 50, 100, 200, 500), distinctive base color, Gandhi portrait (front), or heritage monument motif (back):\n"
+            "   - ₹500: Stone grey / green, Red Fort motif on back, '500' numeral.\n"
+            "   - ₹200: Bright yellow / orange, Sanchi Stupa motif on back, '200' numeral.\n"
+            "   - ₹100: Lavender / purple, Rani ki Vav motif on back, '100' numeral.\n"
+            "   - ₹50: Fluorescent blue, Hampi chariot motif on back, '50' numeral.\n"
+            "   - ₹20: Greenish-yellow, Ellora caves motif on back, '20' numeral.\n"
+            "   - ₹10: Chocolate brown, Konark Sun Temple motif on back, '10' numeral.\n"
+            "2. The banknote may be held in hand showing either the front side or the back side. If the note is clearly identifiable, set confidence to 'high' and uncertain to false.\n"
+            "3. If no banknote is visible, or if the note is heavily blurred, obscured, or ambiguous, DO NOT GUESS. "
             "Set denomination_inr to null, confidence to 'low', and uncertain to true.\n"
-            "3. Return strictly valid JSON in this format:\n"
+            "4. Return strictly valid JSON in this format:\n"
             "{\n"
-            '  "denomination_inr": 100,\n'
+            '  "denomination_inr": 500,\n'
             '  "confidence": "high",\n'
-            '  "spoken_name": "One hundred rupees",\n'
             '  "visible_side": "front",\n'
-            '  "reason": "Clear Mahatma Gandhi portrait and 100 numeral",\n'
+            '  "reason": "Clear 500 numeral and stone grey color",\n'
             '  "uncertain": false\n'
             "}"
         )
 
-        b64_img = self.encode_image_jpeg(image, max_edge=800, quality=85)
+        b64_img = self.encode_image_jpeg(image, max_edge=1024, quality=90)
         res = self._call_cloud_api(prompt, b64_img, high_fidelity=False)
 
         if not res.get("success"):
@@ -403,7 +355,7 @@ class OnlineVisionService:
         data = res.get("data", {})
         denom_raw = data.get("denomination_inr")
         confidence = str(data.get("confidence", "")).lower()
-        uncertain = bool(data.get("uncertain", False)) or confidence not in ("high", "medium")
+        uncertain = bool(data.get("uncertain", False)) or (confidence != "high")
 
         valid_denom = None
         if denom_raw is not None and not uncertain:
@@ -426,12 +378,13 @@ class OnlineVisionService:
                 200: "Two hundred rupees",
                 500: "Five hundred rupees",
             }
-            spoken = data.get("spoken_name") or denom_names.get(valid_denom, f"{valid_denom} rupees")
+            # Strictly build spoken value exclusively from the validated denomination
+            spoken = denom_names[valid_denom]
             return {
                 "success": True,
                 "currency": {
                     "denomination": valid_denom,
-                    "confidence": confidence,
+                    "confidence": "high",
                     "spoken_name": spoken,
                     "visible_side": data.get("visible_side", "unknown"),
                     "reason": data.get("reason", ""),
