@@ -28,3 +28,36 @@ def test_audio_arbiter_suppresses_ping_during_speech():
         arbiter.play_pcm(pcm)
     assert sink.get_total_samples() == 0
     assert arbiter.dropped_low_priority == 1
+
+
+class _MissingToFSensor(SyntheticDistanceSensor):
+    def get_distance_meters(self):
+        return None
+
+
+def test_production_suppresses_navigation_when_tof_sample_is_missing():
+    sink = HeadlessAudioRecorder()
+    pipeline = FastPerceptionPipeline(
+        SyntheticCameraSource(), _MissingToFSensor(), sink,
+        detector=HeadlessObjectDetector(allow_synthetic_fallback=True), mode="production",
+    )
+    result = pipeline.step()
+    assert result["success"] is False
+    assert result["path_state"] == "unknown"
+    assert result["audio_synthesized"] is False
+    assert result["readiness"]["navigation_authoritative"] is False
+    assert any(i["code"] == "RANGE_NO_VALID_SAMPLE" for i in result["readiness"]["issues"])
+    assert sink.get_total_samples() == 0
+    pipeline.shutdown()
+
+
+def test_degraded_readiness_suppresses_inferred_distance_audio():
+    sink = HeadlessAudioRecorder()
+    pipeline = FastPerceptionPipeline(
+        SyntheticCameraSource(), SyntheticDistanceSensor(base_distance_m=1.8), sink,
+        detector=HeadlessObjectDetector(allow_synthetic_fallback=True), mode="production",
+    )
+    pipeline.calibration_verified = False
+    result = pipeline.step()
+    assert result["path_state"] == "unknown"
+    pipeline.shutdown()
