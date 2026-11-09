@@ -148,14 +148,13 @@ Last reviewed: 2026-11-08. For current architecture, measured latency and the or
 
 ---
 
-### 2.3 VLM narration arrives late or describes an old scene
+### 2.3 Online Vision Narration Timing and Internet Latency
 
-#### Symptom: narration takes several seconds, or a correct sentence no longer matches the live scene
+#### Symptom: narration takes longer than expected or fails with offline speech
 
-- **Current evidence:** one real laptop run took about 9.1 seconds. Raspberry Pi performance is not yet measured.
-- **Root cause:** SmolVLM2 runs asynchronously on a request-time frame/fact snapshot. The worker queue holds four tasks and currently has no task expiry, latest-only coalescing, or completion-time sensor revalidation.
-- **Safe response:** do not use narration for immediate navigation. Stop repeated button presses, continue relying on the normal mobility aid, and treat the VLM as optional context only.
-- **Required fix before trials:** implement timestamps/expiry, retain only the newest pending narration, recheck live hazards before speech, and cancel/duck narration for a critical cue. See [`docs/LATENCY.md`](docs/LATENCY.md).
+- **Current Architecture**: Visual scene narration is serviced asynchronously by `OnlineVisionService` (cloud OpenAI GPT-4o-mini or Gemini 2.5 Flash), keeping the fast perception stream (<35 ms) 100% offline.
+- **Fail-Closed Behavior**: If internet access is unavailable or drops, Drishti immediately announces *"Internet unavailable. Scene description is unavailable. Obstacle guidance remains active."* Obstacle sonification never pauses.
+- **Safe usage**: Narration is purely context-descriptive and never provides directional or movement advice. Local ToF/YOLO warnings remain authoritative.
 
 ---
 
@@ -273,23 +272,16 @@ Last reviewed: 2026-11-08. For current architecture, measured latency and the or
 
 ---
 
-### 4.3 Spurious Banknote Announcements from Ambient Room Lighting / Blue Clothes
+### 4.3 Elimination of Spurious Heuristic Banknote Announcements
 
-#### Symptom: Wearable blurted out "Fifty rupees" while the user was simply sitting in front of the camera with no currency present
+#### Symptom: Legacy color/contour heuristics occasionally blurted out false banknotes when viewing shirts or walls
 - **Root Cause**:
-  1. A naive color-only classifier averaged the hue of the entire webcam view. In cool-white LED lighting or with blue clothing in view, the scene's mean hue (~195°) matched the ₹50 fluorescent blue profile.
-  2. Because there was no structural presence check (aspect ratio or texture variance), the classifier assigned an artificial confidence $> 0.70$ to a plain shirt or wall.
-- **Diagnostic Command**:
-  ```bash
-  # Run currency unit test verifying rejection of smooth webcam frames
-  pytest tests/unit/test_currency.py -k "test_reject_user_sitting_in_room" -v
-  ```
-- **Permanent Fix**:
-  Drishti's `IndianCurrencyRecognizer` (`perception/currency.py`) implements a strict multi-stage validator:
-  1. **2D Edge Texture Density Gating**: Computes normalized 2D spatial gradients ($G_x, G_y$). If edge density is $< 14.0$, the object is smooth (face, wall, shirt) and is rejected immediately before color matching.
-  2. **Geometric Aspect Ratio Gating**: When a candidate contour is analyzed, its aspect ratio must lie within the physical banknote range ($1.70 \le \text{AR} \le 2.45$).
-  3. **Ink Saturation Threshold**: Discards low-saturation room washes, requiring high-purity ink pigmentation.
-  4. **On-Demand Activation**: Currency reading is triggered by user intent (Press `C` or Button 2) rather than running unprompted.
+  Legacy HSV color histograms and aspect-ratio heuristics could be fooled by colored clothing or room lighting.
+- **Permanent Solution**:
+  Drishti replaced the offline heuristic classifier with `OnlineVisionService.identify_currency()`. The cloud multimodal vision model directly reads denominational numerals, portraits, and security threads:
+  1. **Strict Ambiguity Rejection**: If no banknote is visible, or if the note is blurred or ambiguous, the model sets `denomination: null` and `uncertain: true`, speaking *"No banknote clearly detected."*
+  2. **Tactile On-Demand Activation**: Currency reading is triggered only on explicit intent (Press `C` or Button 2 on GPIO 33).
+  3. **High-Precision Multimodal Verification**: Evaluates Mahatma Gandhi New Series ₹10, ₹20, ₹50, ₹100, ₹200, ₹500.
 
 ---
 

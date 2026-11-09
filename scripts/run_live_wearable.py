@@ -66,9 +66,12 @@ class KeyboardTriggerThread(threading.Thread):
                 if cmd in ("n", "narrate", "1"):
                     print("\n[KEYBOARD TRIGGER] Injected Button 1 (Scene Narration)")
                     self.trigger_input.inject_trigger(button_id=1)
-                elif cmd in ("c", "ocr", "currency", "2"):
-                    print("\n[KEYBOARD TRIGGER] Injected Button 2 (Currency / OCR)")
+                elif cmd in ("c", "currency", "2"):
+                    print("\n[KEYBOARD TRIGGER] Injected Button 2 (Currency Identification)")
                     self.trigger_input.inject_trigger(button_id=2)
+                elif cmd in ("t", "text", "ocr", "read", "3"):
+                    print("\n[KEYBOARD TRIGGER] Injected Button 3 (Text Reading)")
+                    self.trigger_input.inject_trigger(button_id=3)
                 elif cmd in ("q", "quit", "exit"):
                     print("\n[KEYBOARD] Exit requested by user.")
                     os.kill(os.getpid(), signal.SIGINT)
@@ -263,9 +266,9 @@ def build_hardware_stack(
             esp_trigger = None
 
         if esp_trigger is not None:
-            print("    -> Tactile Input: ESP32 buttons (GPIO32=Narration, GPIO33=Currency/OCR) + N/C keys")
+            print("    -> Tactile Input: ESP32 buttons (GPIO32=Narration, GPIO33=Currency, GPIO25=Text) + N/C/T keys")
         else:
-            print("    -> Tactile Input: Interactive Terminal Keyboard (N: Narration, C: Currency/OCR, Q: Quit)")
+            print("    -> Tactile Input: Interactive Terminal Keyboard (N: Narration, C: Currency, T: Text, Q: Quit)")
 
         synthetic_trigger = SyntheticTriggerInput()
         kb_thread = KeyboardTriggerThread(synthetic_trigger)
@@ -499,14 +502,12 @@ def main() -> None:
     # 4. Startup Vocal Announcement
     if not args.no_speech:
         print("[*] Broadcasting startup chime...")
-        greeting = "Drishti online. Continuous obstacle guidance active. Press C or Button 2 to identify currency."
-        if args.continuous_currency:
-            greeting = "Drishti online. Continuous obstacle guidance and currency detection active."
+        greeting = "Drishti online. Continuous obstacle guidance active. Press N for narration, C for currency, T for text."
         pipeline.speech_service.speak(greeting, play_audio=True)
 
     print("\n" + "=" * 80)
     print("  SYSTEM RUNNING CONTINUOUSLY (Press Ctrl+C to terminate)")
-    print("  Controls: [N + Enter] = Narrate Scene | [C + Enter] = Identify Note/OCR | [Q + Enter] = Quit")
+    print("  Controls: [N] = Narrate Scene | [C] = Currency | [T] = Read Text | [Q] = Quit")
     print("=" * 80 + "\n")
 
 
@@ -555,11 +556,12 @@ def main() -> None:
                     print(f"  >>> [SCENE NARRATION] Spoken: \"{cognitive['narration']}\"")
                 elif cognitive.get("currency", {}).get("denomination") is not None:
                     c = cognitive["currency"]
-                    print(f"  >>> [CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c['confidence']:.2f})")
-                elif "ocr" in cognitive and cognitive["ocr"].get("text"):
-                    print(f"  >>> [OCR] Spoken: \"{cognitive['ocr'].get('text')}\"")
-                elif cognitive.get("success") is False:
-                    print(f"  >>> [READING/CURRENCY] Spoken: \"No banknote or text detected.\"")
+                    print(f"  >>> [CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c.get('confidence', 'high')})")
+                elif "ocr" in cognitive or "text" in cognitive:
+                    txt = cognitive.get("text") or cognitive.get("ocr", {}).get("text")
+                    print(f"  >>> [TEXT READING] Spoken: \"{txt or 'No clear text detected.'}\"")
+                elif cognitive.get("spoken_name"):
+                    print(f"  >>> [COGNITION] Spoken: \"{cognitive['spoken_name']}\"")
 
             # 30 FPS pacing yield
             time.sleep(0.02)

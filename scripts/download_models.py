@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Drishti Model Downloader & Verification Utility.
 
-Downloads and verifies official ONNX neural weights for edge deployment:
+Downloads and verifies official neural weights for offline edge deployment:
 - YOLOv8n ONNX (~12.5 MB): Real-time 80-class COCO obstacle detector
+- Piper TTS ONNX (~61 MB): Local neural text-to-speech voice
 """
 
 import os
@@ -149,32 +150,6 @@ def main() -> int:
         )
         if result.returncode != 0 or not (piper_model.exists() and piper_config.exists()):
             failed_models.append("piper/en_US-lessac-medium")
-
-    vlm_dir = MODELS_DIR / "smolvlm2-500m"
-    def vlm_present() -> bool:
-        return (vlm_dir / "config.json").exists() and any(vlm_dir.glob("*.safetensors"))
-
-    if not vlm_present():
-        print("[*] Provisioning SmolVLM2-500M-Video-Instruct...")
-        try:
-            from huggingface_hub import snapshot_download
-
-            snapshot_download(
-                repo_id="HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
-                local_dir=str(vlm_dir),
-                allow_patterns=[
-                    "*.json",
-                    "*.safetensors",
-                    "merges.txt",
-                    "vocab.json",
-                ],
-            )
-        except Exception as exc:
-            print(f"[!] SmolVLM2 download failed: {exc}")
-            failed_models.append("smolvlm2-500m")
-        if not vlm_present():
-            if "smolvlm2-500m" not in failed_models:
-                failed_models.append("smolvlm2-500m")
 
     print("=" * 70)
     if failed_models:

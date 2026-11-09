@@ -3,8 +3,8 @@
 
 Executes the complete Drishti architecture:
 1. Continuous Fast Perception Loop (Camera -> YOLO -> ToF Fusion -> 3D Spatial Audio).
-2. Tactile Input Handling (Button 1: Scene Narration, Button 2: Currency & OCR).
-3. Local Edge Privacy Filter (2D Gaussian Face Redaction).
+2. Tactile Input Handling (Button 1: Scene Narration, Button 2: Currency, Button 3: Text Reading).
+3. Local Edge Privacy Filter (2D Gaussian Face and Vehicle Plate Redaction).
 4. Caregiver MQTT Telemetry Gateway (Heartbeat, GPS, and SOS Alerts).
 """
 
@@ -76,10 +76,15 @@ def main() -> None:
             print("\n  >>> [EVENT] User presses Tactile Button 1 (Scene Narration) <<<")
             trigger.inject_trigger(button_id=1)
 
-        # On Cycle 6: Inject tactile Button 2 press (User asks to verify Banknote / OCR)
-        elif i == 6:
-            print("\n  >>> [EVENT] User presses Tactile Button 2 (Currency / OCR) <<<")
+        # On Cycle 5: Inject tactile Button 2 press (User asks for Currency Identification)
+        elif i == 5:
+            print("\n  >>> [EVENT] User presses Tactile Button 2 (Currency Identification) <<<")
             trigger.inject_trigger(button_id=2)
+
+        # On Cycle 7: Inject tactile Button 3 press (User asks for Text Reading)
+        elif i == 7:
+            print("\n  >>> [EVENT] User presses Tactile Button 3 (Text Recognition) <<<")
+            trigger.inject_trigger(button_id=3)
 
         res = pipeline.step()
         fast = res.get("fast_perception", {})
@@ -96,15 +101,29 @@ def main() -> None:
             else:
                 print(f"Cycle {i:<2} | Clear    | --       | --       | 3D: --                   | Latency: {lat:.2f} ms")
 
-        # Print event details if triggered
-        if "narration" in res:
-            print(f"         └─► VLM Narration: \"{res['narration']}\"")
-        if "currency" in res:
-            print(f"         └─► Banknote: {res['currency']['spoken_name']} (Conf: {res['currency']['confidence']})")
-        if "ocr" in res:
-            print(f"         └─► OCR Extracted: \"{res['ocr']['text']}\"")
+        for cog in res.get("cognitive_results", []):
+            if "narration" in cog:
+                print(f"         └─► Scene Narration: \"{cog['narration']}\"")
+            if "currency" in cog:
+                curr = cog["currency"]
+                print(f"         └─► Banknote: {curr.get('spoken_name', curr.get('denomination'))}")
+            if "text" in cog or "ocr" in cog:
+                txt = cog.get("text") or cog.get("ocr", {}).get("text")
+                print(f"         └─► Text Recognized: \"{txt}\"")
 
         time.sleep(0.04)
+
+    # Await any in-flight cognitive requests
+    pending_cog = pipeline.wait_for_cognition(timeout=3.0)
+    for cog in pending_cog:
+        if "narration" in cog:
+            print(f"         └─► Scene Narration: \"{cog['narration']}\"")
+        if "currency" in cog:
+            curr = cog["currency"]
+            print(f"         └─► Banknote: {curr.get('spoken_name', curr.get('denomination'))}")
+        if "text" in cog or "ocr" in cog:
+            txt = cog.get("text") or cog.get("ocr", {}).get("text")
+            print(f"         └─► Text Recognized: \"{txt}\"")
 
     # 3. Caregiver Telemetry Ledger
     print("\n" + "-" * 78)

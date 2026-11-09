@@ -22,27 +22,40 @@ class FaceAnonymizer:
         self.sigma = sigma
         self.gaussian_kernel = self._generate_gaussian_kernel(self.kernel_size, self.sigma)
         self.face_cascade = None
+        self.plate_cascade = None
         try:
             import cv2
 
-            candidates = []
+            candidates_face = []
+            candidates_plate = []
             if hasattr(cv2, "data"):
-                candidates.append(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
-            candidates.extend(
+                candidates_face.append(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+                candidates_plate.append(Path(cv2.data.haarcascades) / "haarcascade_russian_plate_number.xml")
+                candidates_plate.append(Path(cv2.data.haarcascades) / "haarcascade_licence_plate_rus_16stages.xml")
+            candidates_face.extend(
                 [
                     Path("/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"),
                     Path("/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml"),
                 ]
             )
-            for cascade_path in candidates:
+            for cascade_path in candidates_face:
                 if not cascade_path.is_file():
                     continue
                 cascade = cv2.CascadeClassifier(str(cascade_path))
                 if not cascade.empty():
                     self.face_cascade = cascade
                     break
+
+            for cascade_path in candidates_plate:
+                if not cascade_path.is_file():
+                    continue
+                cascade = cv2.CascadeClassifier(str(cascade_path))
+                if not cascade.empty():
+                    self.plate_cascade = cascade
+                    break
         except Exception:
             self.face_cascade = None
+            self.plate_cascade = None
 
     @staticmethod
     def _generate_gaussian_kernel(k_size: int, sigma: float) -> np.ndarray:
@@ -171,11 +184,53 @@ class FaceAnonymizer:
 
         return faces
 
+    def detect_plate_regions(
+        self, image: np.ndarray, vehicle_boxes: Optional[List[List[float]]] = None
+    ) -> List[Tuple[int, int, int, int]]:
+        """Detect vehicle license plate candidate regions in an image.
+        
+        Uses OpenCV plate Haar cascade if available, plus vehicle bounding box geometric priors.
+        """
+        h, w = image.shape[:2]
+        plates = []
+
+        if self.plate_cascade is not None:
+            try:
+                import cv2
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                detected = self.plate_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=4,
+                    minSize=(30, 15),
+                )
+                for x, y, pw, ph in detected:
+                    plates.append((int(x), int(y), int(x + pw), int(y + ph)))
+            except Exception:
+                pass
+
+        if vehicle_boxes:
+            for vbox in vehicle_boxes:
+                vx1, vy1, vx2, vy2 = vbox
+                vh = vy2 - vy1
+                vw = vx2 - vx1
+                # License plates are mounted in the lower 25% of vehicles, horizontally centered
+                plate_y1 = max(0, int(vy1 + 0.70 * vh))
+                plate_y2 = min(h, int(vy2))
+                plate_x1 = max(0, int(vx1 + 0.20 * vw))
+                plate_x2 = min(w, int(vx2 - 0.20 * vw))
+                if plate_y2 > plate_y1 and plate_x2 > plate_x1:
+                    plates.append((plate_x1, plate_y1, plate_x2, plate_y2))
+
+        return plates
 
     def anonymize_frame(
-        self, image: np.ndarray, extra_face_boxes: Optional[List[Tuple[int, int, int, int]]] = None
+        self,
+        image: np.ndarray,
+        extra_face_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
+        vehicle_boxes: Optional[List[List[float]]] = None,
     ) -> Dict[str, Any]:
-        """Blur face/person regions found by local detectors.
+        """Blur face and license plate regions found by local edge detectors.
 
         Detection is best-effort and callers must not describe it as a privacy
         guarantee; false negatives remain possible.
@@ -183,19 +238,23 @@ class FaceAnonymizer:
         Args:
             image: Input image array (H, W, 3).
             extra_face_boxes: Optional pre-detected face bounding boxes.
+            vehicle_boxes: Optional vehicle bounding boxes for plate masking.
             
         Returns:
             Dict[str, Any]: Redacted image and bounding box metadata.
         """
         if image is None or image.size == 0:
-            return {"image": image, "faces_redacted": 0, "boxes": []}
+            return {"image": image, "faces_redacted": 0, "plates_redacted": 0, "boxes": []}
 
         anonymized = np.copy(image)
-        boxes = self.detect_face_regions(image)
+        face_boxes = self.detect_face_regions(image)
         if extra_face_boxes:
-            boxes.extend(extra_face_boxes)
+            face_boxes.extend(extra_face_boxes)
 
-        # De-duplicate heavily overlapping cascade/person-derived regions.
+        plate_boxes = self.detect_plate_regions(image, vehicle_boxes=vehicle_boxes)
+        boxes = face_boxes + plate_boxes
+
+        # De-duplicate heavily overlapping cascade/derived regions.
         unique_boxes = []
         for box in boxes:
             x1, y1, x2, y2 = box
@@ -210,11 +269,13 @@ class FaceAnonymizer:
             box_w = x2 - x1
             box_h = y2 - y1
             if box_w > 0 and box_h > 0:
-                face_patch = anonymized[y1:y2, x1:x2, :]
-                anonymized[y1:y2, x1:x2, :] = self.apply_gaussian_blur(face_patch)
+                patch = anonymized[y1:y2, x1:x2, :]
+                anonymized[y1:y2, x1:x2, :] = self.apply_gaussian_blur(patch)
 
         return {
             "image": anonymized,
-            "faces_redacted": len(boxes),
+            "faces_redacted": len(face_boxes),
+            "plates_redacted": len(plate_boxes),
+            "total_redacted": len(boxes),
             "boxes": boxes,
         }

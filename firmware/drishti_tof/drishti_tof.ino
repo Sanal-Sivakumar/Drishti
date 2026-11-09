@@ -32,7 +32,8 @@ namespace {
 constexpr uint8_t PIN_SDA = 21;
 constexpr uint8_t PIN_SCL = 22;
 constexpr uint8_t PIN_BUTTON_1 = 32;  // Narration
-constexpr uint8_t PIN_BUTTON_2 = 33;  // Currency / OCR
+constexpr uint8_t PIN_BUTTON_2 = 33;  // Currency
+constexpr uint8_t PIN_BUTTON_3 = 25;  // Text Reading / OCR
 
 constexpr uint32_t SERIAL_BAUD = 921600;
 constexpr uint16_t TIMING_BUDGET_MS = 33;
@@ -69,9 +70,10 @@ struct ButtonState {
   uint32_t lastChangeMs;
 };
 
-ButtonState buttons[2] = {
+ButtonState buttons[3] = {
     {PIN_BUTTON_1, 1, false, false, 0},
     {PIN_BUTTON_2, 2, false, false, 0},
+    {PIN_BUTTON_3, 3, false, false, 0},
 };
 
 uint16_t medianFilter(uint16_t sample) {
@@ -118,12 +120,15 @@ uint8_t buttonMask() {
   if (buttons[1].stablePressed) {
     mask |= 0x02;
   }
+  if (buttons[2].stablePressed) {
+    mask |= 0x04;
+  }
   return mask;
 }
 
 void pollButtons() {
   uint32_t now = millis();
-  for (uint8_t i = 0; i < 2; i++) {
+  for (uint8_t i = 0; i < 3; i++) {
     ButtonState &button = buttons[i];
     bool reading = (digitalRead(button.pin) == LOW);  // active low
 
@@ -168,6 +173,7 @@ void setup() {
 
   pinMode(PIN_BUTTON_1, INPUT_PULLUP);
   pinMode(PIN_BUTTON_2, INPUT_PULLUP);
+  pinMode(PIN_BUTTON_3, INPUT_PULLUP);
 
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(100000);  // 100 kHz standard mode for robust breadboard wiring

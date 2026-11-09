@@ -2,7 +2,7 @@
 
 Board: **ESP32 DevKit V1** (30-pin, USB-UART bridge)
 Sensor: **VL53L0X** time-of-flight range finder
-Inputs: **2 momentary push buttons** to ground
+Inputs: **3 momentary push buttons** to ground
 
 > The pin table below is the source of truth. Generated images often garble
 > labels — always verify against this table before applying power.
@@ -34,8 +34,9 @@ Inputs: **2 momentary push buttons** to ground
 | **GPIO21 (D21)** | VL53L0X **SDA** | blue | I²C data |
 | **GPIO22 (D22)** | VL53L0X **SCL** | yellow | I²C clock |
 | **3V3** | VL53L0X **XSHUT** | red | Keeps the sensor enabled |
-| **GPIO32 (D32)** | Button 1 → **GND** | green | Narration |
-| **GPIO33 (D33)** | Button 2 → **GND** | green | Currency / OCR |
+| **GPIO32 (D32)** | Button 1 → **GND** | green | Narration (Scene Understanding) |
+| **GPIO33 (D33)** | Button 2 → **GND** | green | Currency Identification |
+| **GPIO25 (D25)** | Button 3 → **GND** | green | Text / Document Reading |
 | **USB** | Laptop | — | Power + serial (`/dev/ttyUSB0`) |
 
 Leave **GPIO1** on the VL53L0X unconnected.

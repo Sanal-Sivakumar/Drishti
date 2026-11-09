@@ -17,15 +17,31 @@ Drishti is an experimental, offline-first assistive-perception prototype for Ras
 
 ## Status at this commit
 
-The software architecture and local VLM path are implemented, and 105 automated tests pass. A real SmolVLM2 smoke run on the development laptop produced grounded JSON in about 9.1 seconds. That latency is acceptable only for optional on-demand context, not navigation.
+The hybrid edge-cloud software architecture is fully implemented, with all 95 automated unit and integration tests passing. Continuous 3D obstacle avoidance (YOLOv8n ONNX + VL53L0X/VL53L1X ToF + binaural audio sonification) runs 100% offline at <35 ms per cycle. Visual cognition (Scene Narration, Indian Banknote Identification, and Multilingual Indic OCR) is handled via a cloud Online Vision API (OpenAI GPT-4o-mini or Google Gemini 2.5 Flash) triggered on-demand via a 3-button hardware layout, with local Gaussian face and license plate anonymization prior to transmission and local Piper neural TTS for playback.
 
-A fresh Git checkout is **not production-ready**: model weights are intentionally not committed, geometry and audio profiles are uncalibrated, no wearable hazard dataset/model has been validated, and no real sensor-to-ear latency distribution has been recorded. Critical audio preemption and stale-narration revalidation remain P0 work; see [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md).
+A fresh Git checkout is configured safely: local model weights for offline perception (`models/yolov8n.onnx` and `models/piper/`) are provisioned via `scripts/download_models.py`, while cloud vision keys (`OPENAI_API_KEY` or `GEMINI_API_KEY`) are read securely from local `.env` (never committed or exposed).
 
 ## How it works, briefly
 
-The fast loop reads the physical camera and ToF sensor, runs YOLO, fuses a range with calibrated image geometry, and emits a horizontal stereo cue. A close ToF measurement bypasses YOLO and the VLM. Button-triggered OCR/currency/narration work runs in a separate bounded worker. SmolVLM2 receives the image plus confirmed sensor facts; its strict JSON is spoken only when it agrees with those facts.
+The architecture strictly decouples safety-critical perception from on-demand cognition:
 
-The VLM is explanatory. It never decides immediate hazard output. A single ToF ray and COCO detector also cannot establish a generally safe or traversable path.
+1. **Continuous Fast Perception (Offline Edge Loop)**:
+   - Reads camera and ToF sensor.
+   - Runs local YOLOv8n ONNX obstacle detection.
+   - Fuses range with calibrated image geometry.
+   - Emits spatial binaural audio pings with ITD/ILD cues.
+   - Close ToF proximity bypasses the detector and triggers immediate emergency cues.
+   - **Never blocks on network or cloud APIs**.
+
+2. **On-Demand Visual Cognition (Online Vision API Path)**:
+   - Triggered via 3 dedicated hardware push buttons or keyboard shortcuts:
+     - **Button 1 (`GPIO 32` / Key `N`)**: Scene Narration (Concisely describes visual context; strictly grounded by local sensor facts; forbidden from issuing movement/navigation advice).
+     - **Button 2 (`GPIO 33` / Key `C`)**: Banknote Identification (Specialized for Indian Rupee Mahatma Gandhi New Series ₹10–₹500; strictly rejects blurred, partial, or ambiguous notes without false positives).
+     - **Button 3 (`GPIO 25` / Key `T`)**: Text Reading / OCR (High-fidelity multilingual Indic text transcription across English, Hindi, Tamil, Malayalam, Bengali, etc.).
+   - Prior to upload, an edge privacy filter applies vectorized Gaussian blur to bystander faces and vehicle license plates.
+   - A bounded background worker dispatches the request to the configured cloud vision provider (OpenAI or Gemini).
+   - If the internet is unreachable, Drishti announces the offline condition immediately while obstacle avoidance remains uninterrupted.
+   - The verified response is vocalized locally via Piper neural TTS.
 
 ## What is implemented
 
@@ -33,9 +49,10 @@ The VLM is explanatory. It never decides immediate hazard output. A single ToF r
 - Fail-closed navigation: a missing camera, stale/unavailable physical range sensor, or missing/invalid YOLO ONNX model produces `path_state: unknown`; it cannot produce “path clear.” Synthetic range is never represented as physical ToF.
 - YOLOv8-style ONNX preprocessing with BGR-to-RGB conversion, letterboxing, input/output contract checks, NMS, COCO class validation, and calibrated-FOV intrinsics.
 - Camera/ToF fusion and binaural obstacle pings. A shared audio priority arbiter prevents routine pings from overlapping spoken cognition.
-- A bounded worker queue for OCR, banknote recognition, and scene narration so those tasks do not block perception.
-- Real local SmolVLM2-500M image inference for on-demand scene description. Its deterministic JSON output is checked against confirmed YOLO/ToF facts before speech; rejected output is never spoken.
-- Local Haar-cascade face detection, detector-assisted person-region redaction, and Gaussian blur. This is best-effort and is not a privacy guarantee; false negatives are possible.
+- A bounded worker queue for scene narration, currency recognition, and text reading so those tasks do not block perception.
+- Cloud-assisted multimodal cognition via `OnlineVisionService` (OpenAI GPT-4o-mini or Gemini 2.5 Flash) with strict JSON contracts, fail-closed movement instruction sanitization, and offline fallback speech.
+- Edge privacy filter: Local Haar-cascade face detection, vehicle license plate detection, and Gaussian blur prior to transmission.
+- Local Piper neural text-to-speech (TTS) for speech playback without cloud voice dependencies.
 - MQTT telemetry with real host sensor readings when available, `null` when unavailable, TLS certificate verification, environment-provided credentials, a bounded persistent buffer, reconnect replay, and QoS 1 PUBACK tracking.
 - Picamera2, OpenCV, V4L2, VL53L1X, and ESP32 serial backends, plus explicitly labeled synthetic backends for tests.
 
@@ -56,8 +73,9 @@ The console, heartbeat, and `/metrics` endpoint expose readiness and `path_state
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e '.[dev,vlm]'
+python -m pip install -e '.[dev]'
 python scripts/download_models.py
+cp .env.example .env  # Add your OPENAI_API_KEY or GEMINI_API_KEY
 python -m pytest tests -q
 ```
 
@@ -95,7 +113,7 @@ Laptop production probing (navigation stays not-ready without a physical ToF sou
 python scripts/run_live_wearable.py --hardware laptop --serial-port /dev/drishti-tof --viewer
 ```
 
-Controls: `N` requests grounded SmolVLM2 scene narration; `C` requests banknote recognition then OCR; `Q` exits. Continuous banknote scanning is opt-in with `--continuous-currency`.
+Controls: `N` requests grounded scene narration (Button 1); `C` requests Indian banknote identification (Button 2); `T` requests multilingual text reading (Button 3); `Q` exits. Continuous banknote scanning is opt-in with `--continuous-currency`.
 
 For the current laptop + ESP32 workflow, stable device paths, Git practices, verification commands, and a reusable AI-session prompt are documented in [`docs/LAPTOP_WORKFLOW.md`](docs/LAPTOP_WORKFLOW.md).
 

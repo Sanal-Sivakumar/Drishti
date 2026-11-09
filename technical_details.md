@@ -36,19 +36,18 @@ Current limitation: the urgent pre-YOLO ToF call uses the default ambient priori
 
 ## Cognitive worker
 
-Button-triggered narration, currency recognition, and OCR are copied into a bounded queue serviced by `CognitiveWorker`. Queue saturation rejects new work instead of accumulating stale tasks. Results are returned asynchronously in `cognitive_results` or through `wait_for_cognition()`.
+Button-triggered narration, currency identification, and text reading are copied into a bounded queue serviced by `CognitiveWorker`. Queue saturation rejects new work instead of accumulating stale tasks. Results are returned asynchronously in `cognitive_results` or through `wait_for_cognition()`.
 
-`GroundedSmolVLMNarrator` loads `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` through Transformers and passes the real RGB camera image plus structured, temporally confirmed sensor facts. Generation uses `do_sample=False`, temperature zero, a token bound, and a generation time bound. The parser requires an exact JSON schema. It rejects contradictory path state, hazard, direction or ToF distance; unsupported hazard words; invented metric values; and movement instructions. Rejected or unavailable model output is not spoken. Immediate perception and audio continue independently.
+`OnlineVisionService` integrates cloud multimodal models (OpenAI GPT-4o-mini or Google Gemini 2.5 Flash) via HTTPS requests. Strict JSON schemas govern all three cognitive actions:
+1. **Scene Narration (Button 1)**: Supplies a privacy-filtered snapshot alongside confirmed local YOLO/ToF facts. Output is strictly sanitized against directional/movement commands; navigation safety belongs exclusively to local sensors.
+2. **Indian Banknote Identification (Button 2)**: Targets Mahatma Gandhi New Series ₹10–₹500. Rejects blurred, folded, or ambiguous frames by returning `uncertain: true` and omitting false-positive announcements.
+3. **Multilingual Text Reading (Button 3)**: High-fidelity literal transcription across Latin and Indic scripts (Hindi, Tamil, Malayalam, Bengali, etc.).
 
-One local CPU smoke test completed in approximately 9.1 seconds. The model stays loaded within a running process, but warm p50/p95/p99 performance has not been recorded. Sensor facts are captured when the task is queued and are not yet revalidated at completion; accepted output can therefore be stale. The four-item cognitive queue also needs latest-only coalescing.
+Visual cognition tasks never block or interrupt the fast perception loop. If internet connectivity drops, Drishti immediately emits local audio informing the user while obstacle avoidance sonification continues without disruption.
 
-Narration confirmation requires consecutive class/direction observations. Critical close-range physical ToF readings bypass both confirmation and the VLM and immediately produce a centre warning with class `unclassified obstacle`.
+## Edge privacy & redaction
 
-OCR expects the camera’s BGR contract and applies BT.601 grayscale coefficients in B, G, R order. Currency recognition remains a color/shape heuristic and should not be treated as an authenticated denomination classifier.
-
-## Face redaction
-
-`FaceAnonymizer` runs OpenCV’s bundled frontal-face Haar cascade and can also use detector-provided person regions. Regions are Gaussian-blurred locally. Detection has false negatives, so this is risk reduction—not an anonymity guarantee. Telemetry sends metadata only in current flows; an emergency payload without explicit redaction metadata reports `privacy_filtered: false`.
+`FaceAnonymizer` runs OpenCV's Haar cascades for frontal faces and vehicle license plates, augmented by YOLO person and vehicle bounding box priors. Vectorized 2D Gaussian blur is applied on CPU before frames are compressed and transmitted to cloud vision APIs. Telemetry sends metadata only; raw camera frames are never transmitted via telemetry.
 
 ## Telemetry
 

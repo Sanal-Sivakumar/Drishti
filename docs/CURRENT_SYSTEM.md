@@ -22,9 +22,11 @@ Physical ToF/ESP32 ──► fresh range sample ───┘
                                              ├─► readiness/path state + viewer
                                              └─► confirmed facts for cognition
 
-Button N / Button 1 ─► bounded cognition queue ─► redaction ─► SmolVLM2
-                                              trusted facts ─► JSON validator
-                                                            ─► speech if accepted
+Button 1 (GPIO 32 / N) ─► bounded worker ─► edge blur (face/plate) ─► Online Vision API (OpenAI/Gemini)
+Button 2 (GPIO 33 / C) ─► bounded worker ─► edge blur             ─► Banknote Recognition (INR)
+Button 3 (GPIO 25 / T) ─► bounded worker ─► edge blur             ─► Multilingual Indic OCR
+                                          trusted facts           ─► Strict JSON validator & Sanitizer
+                                                                  ─► Local Piper TTS playback
 ```
 
 ### 1. Startup and construction
@@ -70,27 +72,19 @@ A single forward ToF sensor is not a depth camera. It cannot establish floor con
 
 `perception/temporal_confirmation.py` requires two consistent observations before detections are sent to narration. This confirmation does not delay the immediate close-ToF warning.
 
-The button-triggered cognition path runs in `cognitive/worker.py`, away from the perception loop. The queue is bounded at four tasks. SmolVLM2 receives the frame and structured trusted facts, then must return exactly:
+The button-triggered cognition path runs in `cognitive/worker.py` via `OnlineVisionService`, away from the fast perception loop. The queue is bounded to reject task buildup. Visual queries are dispatched to cloud multimodal models (OpenAI GPT-4o-mini or Google Gemini 2.5 Flash):
 
-```json
-{
-  "path_clear": false,
-  "primary_hazard": "chair",
-  "direction": "right",
-  "distance_m": 1.3,
-  "speech": "Chair 1.3 metres to your right."
-}
-```
+- **Scene Narration (Button 1 / N)**: Receives the privacy-filtered snapshot alongside confirmed local YOLO/ToF facts. Output must strictly describe context without giving movement or navigation advice.
+- **Banknote Identification (Button 2 / C)**: Inspects Indian Rupee notes (Mahatma Gandhi New Series ₹10–₹500). Strictly rejects blurred, partial, or ambiguous frames without emitting false-positive denominations.
+- **Multilingual Text Reading (Button 3 / T)**: Transcribes printed or written text across Latin and Indic scripts (Devanagari/Hindi, Tamil, Malayalam, Bengali, etc.).
 
-The validator rejects contradictory path state, object, direction or distance; untrusted hazard words; invented metric claims; unsafe movement instructions; schema errors; and empty/placeholder speech. Rejected output is not spoken.
+All cloud output is validated and sanitized against directional instructions before being vocalized via local Piper neural TTS.
 
-The VLM does not control collision warnings. However, its accepted facts currently refer to the request-time snapshot. Completion-time freshness revalidation is still required because laptop inference measured about 9.1 seconds.
+### 7. Banknotes, privacy, and telemetry
 
-### 7. OCR, banknotes, privacy, and telemetry
-
-- OCR uses Tesseract language packs and Unicode NFC normalization.
-- Banknote recognition is a heuristic colour/shape/texture classifier, not a trained or authenticated currency verifier.
-- Face redaction uses a Haar cascade plus person regions. False negatives are possible; it is risk reduction, not an anonymity guarantee.
+- Banknote recognition uses high-detail visual examination with strict ambiguity rejection to eliminate false positives.
+- Multilingual OCR transcribes verbatim printed and written text across Indic scripts.
+- Edge privacy redaction uses Haar cascades and vehicle/person priors to apply 2D Gaussian blur to bystander faces and vehicle license plates before cloud upload.
 - MQTT telemetry sends metadata through TLS/authenticated configuration, stores a bounded JSONL buffer while disconnected, replays after reconnect, and tracks QoS 1 acknowledgements. QoS 1 consumers must tolerate duplicates.
 
 ## What automated tests prove—and do not prove

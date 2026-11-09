@@ -67,3 +67,22 @@ def test_real_face_detector_is_loaded():
     """The production anonymizer must load an actual local face detector."""
     assert FaceAnonymizer().face_cascade is not None
 
+
+def test_license_plate_detection_and_blurring():
+    """Verify vehicle license plate candidate extraction and blurring."""
+    anonymizer = FaceAnonymizer()
+    assert anonymizer.plate_cascade is not None
+    frame = np.full((480, 640, 3), 120, dtype=np.uint8)
+    vehicle_box = [150.0, 100.0, 450.0, 300.0]
+
+    plates = anonymizer.detect_plate_regions(frame, vehicle_boxes=[vehicle_box])
+    assert len(plates) >= 1
+    px1, py1, px2, py2 = plates[0]
+    # Lower portion of vehicle
+    assert py1 > 200
+    assert py2 <= 300
+
+    result = anonymizer.anonymize_frame(frame, vehicle_boxes=[vehicle_box])
+    assert result["plates_redacted"] >= 1
+
+

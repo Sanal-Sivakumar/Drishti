@@ -8,43 +8,40 @@ The repository is a research prototype, not a certified mobility aid. Production
 
 Do not begin outdoor, unsupervised, or target-user trials. Complete the P0/P1 gates in [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md), then use a separately approved supervised indoor protocol.
 
-The current development laptop has locally downloaded SmolVLM2 weights, but Git intentionally excludes model binaries. A fresh clone must run `python scripts/download_models.py`. At the time of this handover the Git tree itself does not contain YOLO or Piper weights.
+The offline fast perception stream requires local model weights (`models/yolov8n.onnx` and `models/piper/`), provisioned via `python scripts/download_models.py`. Cloud vision APIs (OpenAI or Gemini) require API keys configured in `.env` (copied from `.env.example`).
 
 ## Runtime architecture
 
 - `perception/pipeline_fast.py`: the time-critical camera → detector → ToF fusion → spatial cue loop.
-- `cognitive/worker.py`: bounded background queue for narration, currency, and OCR.
+- `cognitive/online_vision.py`: provider-agnostic cloud multimodal service for Scene Narration, Indian Banknote Identification, and Multilingual Indic OCR.
+- `cognitive/worker.py`: bounded background queue for narration, currency, and text reading.
+- `safety/anonymizer.py`: edge privacy engine performing 2D Gaussian blur of bystander faces and vehicle license plates before cloud upload.
 - `hal/audio_priority.py`: shared arbitration state for routine pings and speech.
 - `safety/readiness.py`: authoritative readiness contract.
 - `pipeline.py`: constructs every subsystem from the loaded configuration and publishes real telemetry.
 - `scripts/run_live_wearable.py`: production/simulation entry point. It must not introduce synthetic hardware into production mode.
 
-`GroundedSmolVLMNarrator` performs real local SmolVLM2 image inference in the cognitive worker. It receives temporally confirmed detections and physical-ToF facts in its prompt, emits strict JSON at temperature zero, and is rejected if path state, hazard, direction, distance, wording, or supported object claims conflict with perception. VLM output never controls immediate cues.
+`OnlineVisionService` performs cloud multimodal inference for on-demand cognitive queries. It operates under strict JSON contracts and safety rules: it receives temporally confirmed detections and physical-ToF facts in its prompt, but is strictly sanitized against emitting directional or movement advice. Cloud vision output never controls immediate cues or navigation.
 
-Measured laptop VLM latency is about 9.1 seconds. Request-time facts can therefore be stale by completion. The current code does not yet perform completion-time sensor revalidation or task expiry. The cognition queue accepts four jobs, so repeated requests can create a stale backlog.
+### Hardware Controls
 
-### Open P0 defects
-
-- Close-ToF audio is synthesized before YOLO, but its call does not explicitly carry `CRITICAL` priority or flush speech/older PCM.
-- The main loop sleeps a full frame interval after processing, reducing achieved FPS.
-- Accepted VLM narration is not revalidated against the newest sensor state before speech.
-- User-facing `path_state: clear` is stronger language than a single-ray ToF plus limited COCO detector can justify; migrate to “no tracked hazard.”
+1. **Button 1 (`GPIO 32` / Key `N`)**: Scene Narration.
+2. **Button 2 (`GPIO 33` / Key `C`)**: Indian Banknote Identification (Mahatma Gandhi New Series ₹10–₹500).
+3. **Button 3 (`GPIO 25` / Key `T`)**: Multilingual Text Reading / Indic OCR.
 
 ## Known capability boundaries
 
-- The COCO detector does not cover doors, stairs, drop-offs, potholes, glass, or overhead clearance.
+- The COCO detector covers obstacle detection (`person`, `chair`, `dining table`, `car`, `bicycle`). It does not detect doors, stairs, drop-offs, potholes, glass, or overhead clearance.
 - A single ToF ray does not provide dense depth and must be aligned/calibrated to the camera.
-- Currency recognition is heuristic, not a trained/authenticated banknote verifier.
-- Haar/person-assisted redaction can miss faces. Never promise anonymity and do not transmit images by default.
+- Haar/person/vehicle-assisted redaction reduces privacy risks; it is not a guarantee against all edge cases.
 - GPS is present only when supplied by a real integration (`DRISHTI_GPS_LAT/LON` currently provides the adapter boundary). Missing readings remain `null`.
 - MQTT QoS 1 can deliver duplicates. Consumers must deduplicate by event semantics; the client retains records until PUBACK.
-- The hazard fine-tuning and evaluation tools are implemented, but no wearable dataset is committed and no improved-recall claim is valid until a reviewed dataset is collected and held-out metrics are recorded.
 
 ## Provisioning
 
-Run `sudo bash scripts/setup_raspberry_pi.sh`. It installs Picamera2 from Raspberry Pi OS packages, creates the virtual environment with system packages visible, installs `.[pi,vlm]`, downloads/verifies the provisioned models, and installs the service.
+Run `sudo bash scripts/setup_raspberry_pi.sh`. It installs Picamera2 from Raspberry Pi OS packages, creates the virtual environment with system packages visible, installs `.[pi]`, downloads/verifies the provisioned models, and installs the service.
 
-Broker credentials belong in `/etc/drishti/drishti.env`; do not commit them. Telemetry persistence defaults to `var/telemetry-buffer.jsonl` and is bounded by `buffer_limit`.
+Broker credentials and API keys belong in `.env` or `/etc/drishti/drishti.env`; do not commit them.
 
 ## Verification commands
 

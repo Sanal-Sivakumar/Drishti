@@ -400,7 +400,7 @@ class Esp32Link:
             raise ValueError("short button frame")
         button_id = int(parts[1])
         edge = int(parts[3])
-        if edge != 1 or button_id not in (1, 2):
+        if edge != 1 or button_id not in (1, 2, 3):
             return
         with self._lock:
             self._buttons.append(

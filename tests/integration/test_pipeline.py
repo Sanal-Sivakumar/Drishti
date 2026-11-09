@@ -55,15 +55,26 @@ def test_pipeline_button1_scene_narration(master_pipeline):
     assert len(alerts) >= 1
 
 
-def test_pipeline_button2_reading_or_currency(master_pipeline):
-    """Verify tactile Button 2 triggers currency recognition or OCR readout."""
+def test_pipeline_button2_currency(master_pipeline):
+    """Verify tactile Button 2 triggers currency recognition."""
     # Inject user pressing Button 2
     master_pipeline.trigger_input.inject_trigger(button_id=2)
 
     result = master_pipeline.step()
-    assert result["events"] == [{"type": "READING_OR_CURRENCY_TRIGGERED", "queued": True}]
+    assert result["events"] == [{"type": "CURRENCY_TRIGGERED", "queued": True}]
     completed = master_pipeline.wait_for_cognition()
-    assert completed and (("currency" in completed[0]) or ("ocr" in completed[0]))
+    assert completed and ("currency" in completed[0])
+
+
+def test_pipeline_button3_text_reading(master_pipeline):
+    """Verify tactile Button 3 triggers online text recognition."""
+    # Inject user pressing Button 3
+    master_pipeline.trigger_input.inject_trigger(button_id=3)
+
+    result = master_pipeline.step()
+    assert result["events"] == [{"type": "TEXT_READING_TRIGGERED", "queued": True}]
+    completed = master_pipeline.wait_for_cognition()
+    assert completed and (("ocr" in completed[0]) or ("text" in completed[0]))
 
 
 def test_pipeline_run_loop(master_pipeline):

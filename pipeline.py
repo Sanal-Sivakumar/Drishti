@@ -8,9 +8,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from cognitive.ocr_engine import MultilingualOCREngine
+from cognitive.online_vision import OnlineVisionService
 from cognitive.speech_service import SpeechService
-from cognitive.vlm_narrator import SpatialSceneNarrator
 from cognitive.worker import CognitiveTask, CognitiveWorker
 from config.config_loader import get_pipeline_config
 from config.logging_config import get_logger
@@ -19,7 +18,6 @@ from hal.audio_priority import PriorityAudioArbiter
 from hal.camera import BaseCameraSource
 from hal.distance_sensor import BaseDistanceSensor
 from hal.trigger_input import BaseTriggerInput
-from perception.currency import IndianCurrencyRecognizer
 from perception.pipeline_fast import FastPerceptionPipeline
 from perception.temporal_confirmation import TemporalDetectionConfirmer
 from safety.anonymizer import FaceAnonymizer
@@ -85,40 +83,12 @@ class DrishtiMasterPipeline:
 
         perception = self.config.get("perception", {})
         cognitive = self.config.get("cognitive", {})
-        currency_cfg = perception.get("currency", {})
-        self.currency_classifier = IndianCurrencyRecognizer(
-            confidence_threshold=float(currency_cfg.get("confidence_threshold", 0.75)),
-            supported_denominations=currency_cfg.get("supported_denominations"),
-        )
-        ocr_cfg = cognitive.get("ocr", {})
-        self.ocr_engine = MultilingualOCREngine(
-            languages=ocr_cfg.get("languages"),
-            min_confidence=float(ocr_cfg.get("min_confidence", 60.0)),
-            unicode_normalization=ocr_cfg.get("unicode_normalization", "NFC"),
+        online_cfg = cognitive.get("online_vision", {})
+        self.online_vision = OnlineVisionService(
+            provider=online_cfg.get("provider"),
+            timeout_s=float(online_cfg.get("timeout_s", 8.0)),
             synthetic_mode=is_synthetic,
         )
-        narrator_cfg = cognitive.get("scene_narrator", cognitive.get("vlm", {}))
-        synth_fn = None
-        if is_synthetic:
-            synth_fn = lambda img, prompt: (
-                prompt.split("A minimally valid grounded answer is: ", 1)[1].split(". You may make", 1)[0].strip()
-                if "A minimally valid grounded answer is: " in prompt
-                else '{"path_clear":false,"primary_hazard":"obstacle","direction":"ahead","distance_m":1.65,"speech":"Obstacle 1.65 metres ahead."}'
-            )
-        self.scene_narrator = SpatialSceneNarrator(
-            model_name=narrator_cfg.get(
-                "model_name", "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
-            ),
-            model_path=narrator_cfg.get("model_path"),
-            max_tokens=int(narrator_cfg.get("max_output_tokens", 64)),
-            temperature=float(narrator_cfg.get("temperature", 0.0)),
-            timeout_s=float(narrator_cfg.get("timeout_s", 12.0)),
-            max_image_edge=int(narrator_cfg.get("max_image_edge", 512)),
-            local_files_only=bool(narrator_cfg.get("local_files_only", True)),
-            system_prompt=narrator_cfg.get("prompt_template"),
-            inference_fn=synth_fn,
-        )
-        self.vlm_narrator = self.scene_narrator  # deprecated compatibility name
 
         tts_cfg = cognitive.get("tts", {})
         self.speech_service = SpeechService(
@@ -167,84 +137,86 @@ class DrishtiMasterPipeline:
         if task.kind == "narration":
             obstacles = task.payload.get("obstacles", [])
             person_boxes = [o["bbox"] for o in obstacles if o.get("class_name") == "person" and "bbox" in o]
+            vehicle_boxes = [
+                o["bbox"]
+                for o in obstacles
+                if o.get("class_name") in ("car", "truck", "bus", "motorcycle", "bicycle") and "bbox" in o
+            ]
             redacted = (
-                self.anonymizer.anonymize_frame(frame, extra_face_boxes=person_boxes)
+                self.anonymizer.anonymize_frame(
+                    frame, extra_face_boxes=person_boxes, vehicle_boxes=vehicle_boxes
+                )
                 if self.privacy_enabled
-                else {"image": frame, "faces_redacted": 0}
+                else {"image": frame, "faces_redacted": 0, "plates_redacted": 0}
             )
-            output = self.scene_narrator.describe_scene(
+            output = self.online_vision.describe_scene(
                 redacted["image"],
                 obstacles,
                 navigation_authoritative=bool(task.payload.get("navigation_authoritative", False)),
                 path_state=str(task.payload.get("path_state", "unknown")),
             )
-            if self.speech_enabled and output.get("success"):
-                self.speech_service.speak(output["narration"], play_audio=True)
+            spoken = output.get("narration") or output.get("speech") or "No description available."
+            if self.speech_enabled:
+                self.speech_service.speak(spoken, play_audio=True)
             self.telemetry.publish_event(
                 "USER_NARRATION_REQUEST",
-                {"faces_redacted": redacted["faces_redacted"], "privacy_filter_enabled": self.privacy_enabled},
+                {
+                    "faces_redacted": redacted.get("faces_redacted", 0),
+                    "plates_redacted": redacted.get("plates_redacted", 0),
+                    "privacy_filter_enabled": self.privacy_enabled,
+                },
             )
-            return {**output, "faces_redacted": redacted["faces_redacted"]}
+            return {
+                **output,
+                "narration": spoken,
+                "faces_redacted": redacted.get("faces_redacted", 0),
+                "plates_redacted": redacted.get("plates_redacted", 0),
+            }
+
+        if task.kind == "currency":
+            output = self.online_vision.identify_currency(frame)
+            curr = output.get("currency", {})
+            spoken = curr.get("spoken_name") or output.get("spoken_name") or "No banknote detected."
+            if self.speech_enabled:
+                self.speech_service.speak(spoken, play_audio=True)
+            return {"success": output.get("success", False), "currency": curr, "spoken_name": spoken}
+
+        if task.kind in ("reading", "text_reading"):
+            output = self.online_vision.read_text(frame)
+            text = output.get("text", "").strip()
+            spoken = output.get("spoken_name") or (text if text else "No clear text detected.")
+            if self.speech_enabled:
+                self.speech_service.speak(spoken, play_audio=True)
+            return {
+                "success": output.get("success", False),
+                "ocr": output,
+                "text": text,
+                "spoken_name": spoken,
+            }
+
+        # Backward compatibility for legacy tests
+        if task.kind == "reading_or_currency":
+            curr_out = self.online_vision.identify_currency(frame)
+            curr = curr_out.get("currency", {})
+            if curr.get("denomination") is not None:
+                if self.speech_enabled:
+                    self.speech_service.speak(curr["spoken_name"], play_audio=True)
+                return {"success": True, "currency": curr}
+            text_out = self.online_vision.read_text(frame)
+            text = text_out.get("text", "").strip()
+            if self.speech_enabled:
+                self.speech_service.speak(text if text else "No clear text detected.", play_audio=True)
+            return {"success": True, "ocr": text_out}
 
         if task.kind == "continuous_currency":
-            currency = self.currency_classifier.identify_currency(frame, color_order="BGR")
-            if currency.get("denomination") is not None:
+            output = self.online_vision.identify_currency(frame)
+            curr = output.get("currency", {})
+            if curr.get("denomination") is not None:
                 if self.speech_enabled:
-                    self.speech_service.speak(currency["spoken_name"], play_audio=True)
-            return {"success": True, "currency": currency}
+                    self.speech_service.speak(curr["spoken_name"], play_audio=True)
+            return {"success": True, "currency": curr}
 
-        # Handle on-demand Button 2 / keyboard 'C' (reading or currency)
-        # In simulation / synthetic mode: evaluate immediately on the test frame
-        if self.mode == "simulation" or getattr(self.camera, "is_synthetic", False):
-            currency = self.currency_classifier.identify_currency(frame, color_order="BGR")
-            if currency.get("denomination") is not None:
-                if self.speech_enabled:
-                    self.speech_service.speak(currency["spoken_name"], play_audio=True)
-                return {"success": True, "currency": currency}
-            ocr = self.ocr_engine.extract_text(frame)
-            if self.speech_enabled:
-                self.speech_service.speak(ocr.get("text") or "No clear text detected.", play_audio=True)
-            return {"success": True, "ocr": ocr}
-
-        # Production active scanning window: inspect live frames for up to 4.0 seconds
-        scan_deadline = time.time() + 4.0
-        best_ocr: Optional[Dict[str, Any]] = None
-        last_check_time = 0.0
-
-        while time.time() < scan_deadline:
-            now = time.time()
-            if now - last_check_time >= 0.20:
-                last_check_time = now
-                live_frame = self._frame()
-                if live_frame is None:
-                    live_frame = frame
-
-                if live_frame is not None:
-                    # 1. Banknote check
-                    curr = self.currency_classifier.identify_currency(live_frame, color_order="BGR")
-                    if curr.get("denomination") is not None:
-                        if self.speech_enabled:
-                            self.speech_service.speak(curr["spoken_name"], play_audio=True)
-                        return {"success": True, "currency": curr}
-
-                    # 2. OCR check
-                    ocr_res = self.ocr_engine.extract_text(live_frame)
-                    txt = ocr_res.get("text", "").strip()
-                    if txt and len(txt) >= 3:
-                        if best_ocr is None or len(txt) > len(best_ocr.get("text", "")):
-                            best_ocr = ocr_res
-                        if ocr_res.get("confidence", 0.0) >= 0.70 and len(txt) >= 8:
-                            break
-            time.sleep(0.04)
-
-        if best_ocr is not None and best_ocr.get("text"):
-            if self.speech_enabled:
-                self.speech_service.speak(best_ocr["text"], play_audio=True)
-            return {"success": True, "ocr": best_ocr}
-
-        if self.speech_enabled:
-            self.speech_service.speak("No banknote or text detected.", play_audio=True)
-        return {"success": False, "ocr": {"text": "", "script": "none", "confidence": 0.0, "lines": []}}
+        return {"success": False, "error": f"unknown_task_kind_{task.kind}"}
 
     def _collect_cognitive_results(self) -> list[Dict[str, Any]]:
         results = []
@@ -293,9 +265,16 @@ class DrishtiMasterPipeline:
         if self.trigger_input.poll_trigger(button_id=2):
             frame = self._frame()
             if self.speech_enabled and self.mode != "simulation":
-                self.speech_service.speak("Scanning for banknote or text...", play_audio=True)
-            queued = frame is not None and self.cognitive_worker.submit("reading_or_currency", {"frame": frame})
-            cycle_result["events"].append({"type": "READING_OR_CURRENCY_TRIGGERED", "queued": queued})
+                self.speech_service.speak("Checking banknote...", play_audio=True)
+            queued = frame is not None and self.cognitive_worker.submit("currency", {"frame": frame})
+            cycle_result["events"].append({"type": "CURRENCY_TRIGGERED", "queued": queued})
+
+        if self.trigger_input.poll_trigger(button_id=3):
+            frame = self._frame()
+            if self.speech_enabled and self.mode != "simulation":
+                self.speech_service.speak("Reading text...", play_audio=True)
+            queued = frame is not None and self.cognitive_worker.submit("reading", {"frame": frame})
+            cycle_result["events"].append({"type": "TEXT_READING_TRIGGERED", "queued": queued})
 
         now = time.time()
         if now - self.last_heartbeat_time >= self.heartbeat_interval_s:

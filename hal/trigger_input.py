@@ -21,7 +21,7 @@ class BaseTriggerInput(ABC):
         """Poll whether a specific button is currently pressed.
         
         Args:
-            button_id: 1 for Scene Narration, 2 for Currency / Multilingual OCR.
+            button_id: 1 for Scene Narration, 2 for Currency, 3 for Text Reading.
         """
         pass
 
@@ -35,7 +35,7 @@ class SyntheticTriggerInput(BaseTriggerInput):
     """Programmatic event trigger for headless automated testing."""
 
     def __init__(self) -> None:
-        self.callbacks: Dict[int, List[Callable[[], None]]] = {1: [], 2: []}
+        self.callbacks: Dict[int, List[Callable[[], None]]] = {1: [], 2: [], 3: []}
         self._events: collections.deque = collections.deque()
         self._lock = threading.Lock()
 
@@ -69,11 +69,12 @@ class GPIOPushButtonTrigger(BaseTriggerInput):
         self,
         pin_button_1: int = 17,
         pin_button_2: int = 27,
+        pin_button_3: int = 25,
         debounce_ms: int = 50
     ) -> None:
-        self.pin_map = {1: pin_button_1, 2: pin_button_2}
+        self.pin_map = {1: pin_button_1, 2: pin_button_2, 3: pin_button_3}
         self.debounce_sec = debounce_ms / 1000.0
-        self.last_press_time = {1: 0.0, 2: 0.0}
+        self.last_press_time = {1: 0.0, 2: 0.0, 3: 0.0}
         self.gpio_available = False
 
         try:

@@ -88,3 +88,9 @@ coverage.xml
 *.log
 logs/
 *.pid
+
+# Local environment configuration & API keys (NEVER COMMIT)
+.env
+*.env
+.env.*
+!.env.example
