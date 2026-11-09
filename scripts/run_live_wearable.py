@@ -238,8 +238,15 @@ def build_hardware_stack(
                 distance_sensor: BaseDistanceSensor = UnavailableDistanceSensor()
                 esp_trigger: Optional[ESP32ButtonTrigger] = None
             else:
+                # If sensor arrived in timeout state (status=254), send soft reset to recover I2C
+                latest = esp_sensor.link.latest()
+                if latest is not None and latest.status == 254:
+                    print("    [*] ESP32 sensor in timeout state; issuing auto-recovery reset...")
+                    esp_sensor.link.request_reset()
+                    time.sleep(0.5)
+
                 # Let the boot banner arrive on the first heartbeat before printing.
-                time.sleep(0.1)
+                time.sleep(0.2)
                 link_status = esp_sensor.get_link_status()
                 print(
                     f"    [✓] ESP32 link on {link_status.port} | fw {link_status.firmware or '?'} "

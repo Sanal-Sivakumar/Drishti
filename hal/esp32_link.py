@@ -137,6 +137,8 @@ class Esp32Link:
         self._device_invalid_pct = 0.0
         self._i2c_ok = True
         self._device_link_ok = True
+        self._consecutive_timeouts = 0
+        self._last_recovery_reset = 0.0
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -177,6 +179,17 @@ class Esp32Link:
     def port(self) -> str:
         with self._lock:
             return self._port
+
+    def request_reset(self) -> None:
+        """Send a soft-reset command ('R') to the ESP32 MCU."""
+        with self._lock:
+            ser = self._serial
+        if ser is not None:
+            try:
+                ser.write(b"R\n")
+                logger.info("Sent soft-reset request to ESP32.")
+            except Exception as exc:
+                logger.warning("Failed to send soft-reset to ESP32: %s", exc)
 
     # ------------------------------------------------------------------ reader
 
@@ -354,6 +367,21 @@ class Esp32Link:
             self._samples += 1
             if status != 0:
                 self._invalid += 1
+            if status == 254:
+                self._consecutive_timeouts += 1
+            elif status == 0:
+                self._consecutive_timeouts = 0
+
+            if self._consecutive_timeouts >= 25 and (now - self._last_recovery_reset) > 5.0:
+                self._last_recovery_reset = now
+                self._consecutive_timeouts = 0
+                logger.warning("ESP32 ToF hardware timeout persistent (status 254); issuing auto-recovery reset.")
+                ser = self._serial
+                if ser is not None:
+                    try:
+                        ser.write(b"R\n")
+                    except Exception:
+                        pass
             self._sample_times.append(now)
             self._button_mask = button_mask
             self._last_rx = now
