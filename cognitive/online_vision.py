@@ -55,10 +55,12 @@ def _ipv4_first_create_connection(address, *args, **kwargs):
                 for opt in kwargs["socket_options"]:
                     sock.setsockopt(*opt)
             if "timeout" in kwargs and kwargs["timeout"] is not None:
-                sock.settimeout(kwargs["timeout"])
+                sock.settimeout(min(float(kwargs["timeout"]), 4.0))
             if "source_address" in kwargs and kwargs["source_address"]:
                 sock.bind(kwargs["source_address"])
             sock.connect(sa)
+            if "timeout" in kwargs and kwargs["timeout"] is not None:
+                sock.settimeout(kwargs["timeout"])
             return sock
         except socket.error as e:
             err = e
@@ -212,6 +214,13 @@ class OnlineVisionService:
                     "Content-Type": "application/json",
                     "x-goog-api-key": self.api_key,
                 }
+                gen_config: Dict[str, Any] = {
+                    "response_mime_type": "application/json",
+                    "temperature": 0.1,
+                }
+                if "gemini-2" in self.model or "gemini-3" in self.model or "flash" in self.model:
+                    gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+
                 payload = {
                     "contents": [
                         {
@@ -221,10 +230,7 @@ class OnlineVisionService:
                             ]
                         }
                     ],
-                    "generationConfig": {
-                        "response_mime_type": "application/json",
-                        "temperature": 0.1,
-                    },
+                    "generationConfig": gen_config,
                 }
                 resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout_s)
                 resp.raise_for_status()
