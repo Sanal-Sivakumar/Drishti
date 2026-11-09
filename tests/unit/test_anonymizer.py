@@ -86,3 +86,20 @@ def test_license_plate_detection_and_blurring():
     assert result["plates_redacted"] >= 1
 
 
+def test_anonymizer_does_not_blur_text_or_white_page_without_faces():
+    """Verify white pages, books, and text documents are NOT blurred as faces or license plates."""
+    import cv2
+    anonymizer = FaceAnonymizer()
+    frame = np.full((480, 640, 3), 245, dtype=np.uint8)
+    for y in range(60, 400, 50):
+        cv2.putText(frame, "Sample text in book or document", (60, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 20, 20), 2)
+
+    result = anonymizer.anonymize_frame(frame)
+    assert result["faces_redacted"] == 0
+    assert result["plates_redacted"] == 0
+    assert result["total_redacted"] == 0
+    assert len(result["boxes"]) == 0
+    assert np.array_equal(result["image"], frame)
+
+
+

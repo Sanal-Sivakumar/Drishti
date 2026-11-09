@@ -577,6 +577,16 @@ def main() -> None:
                 codes = ", ".join(x.get("code", "UNKNOWN") for x in issues) or fast.get("error", "unknown")
                 print(f"Cycle {cycle_count:<5} | NAVIGATION NOT READY | {codes}")
 
+            # Tactile Button Trigger Events (instant terminal confirmation on press)
+            for ev in res.get("events", []):
+                ev_type = ev.get("type")
+                if ev_type == "SCENE_NARRATION_TRIGGERED":
+                    print("\n  >>> [BUTTON 1 PRESSED] Scene Narration queued for Gemini Vision...")
+                elif ev_type == "CURRENCY_TRIGGERED":
+                    print("\n  >>> [BUTTON 2 PRESSED] Banknote Identification queued for Gemini Vision...")
+                elif ev_type == "TEXT_READING_TRIGGERED":
+                    print("\n  >>> [BUTTON 3 PRESSED] Multilingual Text Reading queued for Gemini Vision...")
+
             # Cognitive results (Scene narration, Banknote, OCR)
             for cognitive in res.get("cognitive_results", []):
                 if "narration" in cognitive:
