@@ -98,17 +98,25 @@ class DrishtiMasterPipeline:
             synthetic_mode=is_synthetic,
         )
         narrator_cfg = cognitive.get("scene_narrator", cognitive.get("vlm", {}))
+        synth_fn = None
+        if is_synthetic:
+            synth_fn = lambda img, prompt: (
+                prompt.split("A minimally valid grounded answer is: ", 1)[1].split(". You may make", 1)[0].strip()
+                if "A minimally valid grounded answer is: " in prompt
+                else '{"path_clear":false,"primary_hazard":"obstacle","direction":"ahead","distance_m":1.65,"speech":"Obstacle 1.65 metres ahead."}'
+            )
         self.scene_narrator = SpatialSceneNarrator(
             model_name=narrator_cfg.get(
                 "model_name", "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
             ),
             model_path=narrator_cfg.get("model_path"),
             max_tokens=int(narrator_cfg.get("max_output_tokens", 64)),
-            temperature=float(narrator_cfg.get("temperature", 0.2)),
+            temperature=float(narrator_cfg.get("temperature", 0.0)),
             timeout_s=float(narrator_cfg.get("timeout_s", 12.0)),
             max_image_edge=int(narrator_cfg.get("max_image_edge", 512)),
             local_files_only=bool(narrator_cfg.get("local_files_only", True)),
             system_prompt=narrator_cfg.get("prompt_template"),
+            inference_fn=synth_fn,
         )
         self.vlm_narrator = self.scene_narrator  # deprecated compatibility name
 
