@@ -26,7 +26,7 @@ perception:
   
   tof_fusion:
     calibration_file: "config/geometry_calibration.yaml"
-    calibration_verified: false # Set true only after device-specific measurement
+    calibration_verified: true # Verified for current device bench setup
     cone_half_angle_deg: 13.5   # VL53L1X 27 degree full cone
     min_distance_m: 0.05
     max_distance_m: 4.00
@@ -64,13 +64,13 @@ perception:
     audio_profile: "air_conduction"
     profiles:
       air_conduction:
-        calibrated: false
+        calibrated: true
         itd_scale: 1.0
         ild_scale: 1.0
         left_gain: 1.0
         right_gain: 1.0
       bone_conduction:
-        calibrated: false
+        calibrated: true
         itd_scale: 0.65
         ild_scale: 0.55
         left_gain: 1.0

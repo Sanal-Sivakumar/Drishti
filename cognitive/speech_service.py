@@ -506,6 +506,7 @@ class SpeechService:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
+                start_new_session=True,
             )
         except (FileNotFoundError, OSError) as exc:
             return 127, "", str(exc)
