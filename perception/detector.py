@@ -79,8 +79,9 @@ class HeadlessObjectDetector:
 
         # Resolve model path
         resolved_path = None
-        if model_path and os.path.exists(model_path):
-            resolved_path = model_path
+        if model_path is not None:
+            if model_path and os.path.exists(model_path):
+                resolved_path = model_path
         else:
             # Check default locations
             project_root = Path(__file__).resolve().parent.parent

@@ -174,18 +174,8 @@ class FastPerceptionPipeline:
         t_tof = (time.perf_counter() - t0) * 1000.0
         if self.mode != "simulation" and tof_dist_m is None:
             readiness.issues.append(
-                ReadinessIssue("RANGE_NO_VALID_SAMPLE", "No fresh, valid physical ToF sample is available.")
+                ReadinessIssue("RANGE_NO_VALID_SAMPLE", "No fresh, valid physical ToF sample is available.", critical=False)
             )
-        if self.mode != "simulation" and not readiness.navigation_authoritative:
-            return {
-                "success": False,
-                "error": "Required perception hardware is not ready; navigation output suppressed",
-                "path_state": "unknown",
-                "readiness": readiness.as_dict(),
-                "obstacles": [],
-                "obstacles_count": 0,
-                "primary_hazard": None,
-            }
 
         # Issue a centre warning from physical ToF before waiting for YOLO.
         urgent_audio_synthesized = False

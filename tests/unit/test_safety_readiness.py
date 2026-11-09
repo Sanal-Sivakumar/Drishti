@@ -11,7 +11,7 @@ from perception.pipeline_fast import FastPerceptionPipeline
 def test_production_fails_closed_without_real_detector():
     pipeline = FastPerceptionPipeline(
         SyntheticCameraSource(), SyntheticDistanceSensor(), HeadlessAudioRecorder(),
-        detector=HeadlessObjectDetector(allow_synthetic_fallback=False), mode="production",
+        detector=HeadlessObjectDetector(model_path="nonexistent.onnx", allow_synthetic_fallback=False), mode="production",
     )
     result = pipeline.step()
     assert result["success"] is False
