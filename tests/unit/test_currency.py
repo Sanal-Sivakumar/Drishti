@@ -182,5 +182,19 @@ def test_directional_wood_grain_is_rejected():
     assert res["denomination"] is None
 
 
+def test_identify_currency_ten_rupees_handheld():
+    """Verify ₹10 chocolate brown note is recognized in a frame with warm lighting."""
+    rec = IndianCurrencyRecognizer(confidence_threshold=0.55)
+    frame = np.full((480, 640, 3), [120, 140, 160], dtype=np.uint8)
+    frame[180:270, 230:400, :] = [30, 70, 140]
+    frame[180:270:2, 230:400:2, :] += 20
+
+    res = rec.identify_currency(frame, color_order="BGR")
+    assert res["denomination"] == 10
+    assert "Ten" in res["spoken_name"]
+    assert res["confidence"] >= 0.55
+    assert "bbox" in res
+
+
 
 

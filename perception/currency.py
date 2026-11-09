@@ -18,7 +18,8 @@ class IndianCurrencyRecognizer:
             "name": "Ten rupees",
             "dimensions_mm": (123, 63),
             "aspect_ratio": 1.95,
-            "hue_center_deg": 18.0,  # Chocolate Brown
+            "hue_center_deg": 20.0,  # Chocolate Brown
+            "hue_tolerance": 20.0,
         },
         20: {
             "name": "Twenty rupees",
@@ -59,7 +60,7 @@ class IndianCurrencyRecognizer:
 
     def __init__(
         self,
-        confidence_threshold: float = 0.70,
+        confidence_threshold: float = 0.55,
         supported_denominations: Optional[list[int]] = None,
     ) -> None:
         self.conf_thresh = confidence_threshold
@@ -186,7 +187,7 @@ class IndianCurrencyRecognizer:
 
         # Verify paper-currency geometry with tilt/perspective tolerance.
         if bbox_aspect_ratio is not None:
-            if bbox_aspect_ratio < 1.60 or bbox_aspect_ratio > 2.65:
+            if bbox_aspect_ratio < 1.45 or bbox_aspect_ratio > 2.85:
                 return {
                     "denomination": None,
                     "spoken_name": "No note detected",
@@ -281,9 +282,9 @@ class IndianCurrencyRecognizer:
             c_edges = cv2.Canny(frame[:, :, ch], 30, 100)
             edges = cv2.bitwise_or(edges, c_edges)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+        contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
         best_candidate = None
         best_conf = 0.0
@@ -291,18 +292,18 @@ class IndianCurrencyRecognizer:
         for c in contours:
             bx, by, bw, bh = cv2.boundingRect(c)
             bbox_area = float(bw * bh)
-            if bbox_area < 0.03 * total_pixels or bbox_area > 0.70 * total_pixels:
+            if bbox_area < 0.02 * total_pixels or bbox_area > 0.85 * total_pixels:
                 continue
-            if bw < 60 or bh < 30:
+            if bw < 50 or bh < 25:
                 continue
 
             ar = max(bw, bh) / max(1.0, min(bw, bh))
-            if ar < 1.60 or ar > 2.65:
+            if ar < 1.45 or ar > 2.85:
                 continue
 
-            # A banknote is a filled, convex quadrilateral. Reject L-shaped
-            # furniture regions, hands and background clutter that merely
-            # have a 2:1 bounding box.
+            # A banknote is a filled, roughly rectangular shape. Reject long thin
+            # lines, tiny fragments, and heavily concave artifacts while allowing
+            # natural hand-held tilt and fingers holding the note edge.
             contour_area = float(cv2.contourArea(c))
             if contour_area <= 0:
                 continue
@@ -310,11 +311,11 @@ class IndianCurrencyRecognizer:
             hull = cv2.convexHull(c)
             hull_area = float(cv2.contourArea(hull))
             solidity = contour_area / hull_area if hull_area > 0 else 0.0
-            if rectangularity < 0.55 or solidity < 0.85:
+            if rectangularity < 0.35 or solidity < 0.65:
                 continue
 
             approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
-            if not (4 <= len(approx) <= 6):
+            if len(approx) > 16:
                 continue
 
             roi = frame[by:by + bh, bx:bx + bw]

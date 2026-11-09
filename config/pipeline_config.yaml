@@ -44,7 +44,7 @@ perception:
       car: 1.50
 
   currency:
-    confidence_threshold: 0.75
+    confidence_threshold: 0.55
     supported_denominations: [10, 20, 50, 100, 200, 500]
 
   spatial_audio:
