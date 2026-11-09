@@ -16,20 +16,79 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
+import socket
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 import cv2
 import numpy as np
 import requests
-import socket
-import urllib3.util.connection as urllib3_conn
-
-# Prioritize IPv4 to prevent IPv6 routing timeouts on edge networks
-urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPSConnection
+from urllib3.connectionpool import HTTPSConnectionPool
 
 from config.logging_config import get_logger
 
 logger = get_logger("cognitive.online_vision")
+
+VALID_INR_DENOMINATIONS: Set[int] = {10, 20, 50, 100, 200, 500}
+
+
+def _ipv4_first_create_connection(address, *args, **kwargs):
+    """Resolve DNS with IPv4-first ordering and transparent IPv6 fallback."""
+    host, port = address
+    if host.startswith("["):
+        host = host.strip("[]")
+
+    infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    v4 = [r for r in infos if r[0] == socket.AF_INET]
+    v6 = [r for r in infos if r[0] == socket.AF_INET6]
+    other = [r for r in infos if r[0] not in (socket.AF_INET, socket.AF_INET6)]
+
+    err = None
+    for res in v4 + v6 + other:
+        af, socktype, proto, canonname, sa = res
+        sock = None
+        try:
+            sock = socket.socket(af, socktype, proto)
+            if "socket_options" in kwargs and kwargs["socket_options"]:
+                for opt in kwargs["socket_options"]:
+                    sock.setsockopt(*opt)
+            if "timeout" in kwargs and kwargs["timeout"] is not None:
+                sock.settimeout(kwargs["timeout"])
+            if "source_address" in kwargs and kwargs["source_address"]:
+                sock.bind(kwargs["source_address"])
+            sock.connect(sa)
+            return sock
+        except socket.error as e:
+            err = e
+            if sock is not None:
+                sock.close()
+    if err is not None:
+        raise err
+    raise socket.error("getaddrinfo returns an empty list")
+
+
+class _IPv4FirstHTTPSConnection(HTTPSConnection):
+    def _new_conn(self):
+        extra_args = {}
+        if self.source_address:
+            extra_args["source_address"] = self.source_address
+        if self.socket_options:
+            extra_args["socket_options"] = self.socket_options
+        return _ipv4_first_create_connection(
+            (self.host, self.port), self.timeout, **extra_args
+        )
+
+
+class _IPv4FirstAdapter(HTTPAdapter):
+    """Session adapter that prioritizes IPv4 to prevent IPv6 timeouts without global patching."""
+
+    def get_connection(self, url, proxies=None):
+        conn = super().get_connection(url, proxies=proxies)
+        if isinstance(conn, HTTPSConnectionPool):
+            conn.ConnectionCls = _IPv4FirstHTTPSConnection
+        return conn
 
 
 def load_env_file(env_path: Optional[str | Path] = None) -> None:
@@ -59,38 +118,64 @@ class OnlineVisionService:
         self,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        openai_model: Optional[str] = None,
+        gemini_model: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout_s: float = 12.0,
         synthetic_mode: bool = False,
         mock_fn: Optional[Callable[[str, str], str]] = None,
+        load_env: bool = True,
     ) -> None:
-        load_env_file()
+        if load_env:
+            load_env_file()
         self.synthetic_mode = synthetic_mode
         self.mock_fn = mock_fn
         self.timeout_s = timeout_s or 12.0
 
-        # Resolve provider and API key
-        env_provider = os.environ.get("DRISHTI_VISION_PROVIDER", "").strip().lower()
+        # Session-scoped adapter with IPv4 priority & IPv6 fallback
+        self.session = requests.Session()
+        adapter = _IPv4FirstAdapter()
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+
+        # Provider resolution (normalize 'auto' or empty to None)
+        raw_provider = (provider or os.environ.get("DRISHTI_VISION_PROVIDER", "")).strip().lower()
+        if raw_provider in ("auto", ""):
+            raw_provider = None
+
         has_gemini = bool(os.environ.get("GEMINI_API_KEY", "").strip())
         has_openai = bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
-        resolved_provider = (
-            provider
-            or (env_provider if env_provider in ("gemini", "openai") else None)
-            or ("gemini" if has_gemini and not has_openai else "openai")
-        ).lower()
-        self.provider = resolved_provider
+        if raw_provider in ("gemini", "openai"):
+            self.provider = raw_provider
+        elif has_gemini and not has_openai:
+            self.provider = "gemini"
+        elif has_openai and not has_gemini:
+            self.provider = "openai"
+        elif has_gemini and has_openai:
+            self.provider = "gemini"
+        else:
+            self.provider = "openai"
 
         env_model = os.environ.get("DRISHTI_VISION_MODEL", "").strip()
         if self.provider == "gemini":
             self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "").strip()
-            self.model = model or (env_model if env_model else "gemini-3.1-flash-lite")
+            self.model = model or gemini_model or (env_model if env_model else "gemini-3.1-flash-lite")
         else:
             self.provider = "openai"
             self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "").strip()
-            self.model = model or (env_model if env_model else "gpt-4o-mini")
+            self.model = model or openai_model or (env_model if env_model else "gpt-4o-mini")
 
         self.has_key = bool(self.api_key and len(self.api_key.strip()) > 5)
+
+    @staticmethod
+    def sanitize_error(error_msg: str, secret: Optional[str] = None) -> str:
+        """Strip sensitive API keys or credential query parameters from error strings."""
+        clean = str(error_msg)
+        if secret and len(secret) > 3:
+            clean = clean.replace(secret, "[REDACTED_API_KEY]")
+        clean = re.sub(r"([?&]key=)[^&\s'\"]+", r"\1[REDACTED]", clean)
+        return clean
 
     @staticmethod
     def encode_image_jpeg(image: np.ndarray, max_edge: int = 1024, quality: int = 85) -> str:
@@ -121,8 +206,12 @@ class OnlineVisionService:
         t0 = time.time()
         try:
             if self.provider == "gemini":
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-                headers = {"Content-Type": "application/json"}
+                # Google Generative Language API supports header authentication to avoid URL key exposure
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+                headers = {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": self.api_key,
+                }
                 payload = {
                     "contents": [
                         {
@@ -137,7 +226,7 @@ class OnlineVisionService:
                         "temperature": 0.1,
                     },
                 }
-                resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
+                resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout_s)
                 resp.raise_for_status()
                 data = resp.json()
                 text_content = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -169,7 +258,7 @@ class OnlineVisionService:
                     "temperature": 0.1,
                     "max_tokens": 300,
                 }
-                resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
+                resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout_s)
                 resp.raise_for_status()
                 data = resp.json()
                 text_content = data["choices"][0]["message"]["content"]
@@ -186,10 +275,11 @@ class OnlineVisionService:
                 "speech": "Internet request timed out. Obstacle guidance remains active.",
             }
         except Exception as exc:
-            logger.warning(f"Online vision request failed: {exc}")
+            sanitized = self.sanitize_error(str(exc), self.api_key)
+            logger.warning(f"Online vision request failed: {sanitized}")
             return {
                 "success": False,
-                "error": str(exc),
+                "error": sanitized,
                 "speech": "Internet unavailable. Obstacle guidance remains active.",
             }
 
@@ -249,7 +339,6 @@ class OnlineVisionService:
             "safe to proceed", "safe to walk", "go ahead", "move forward",
             "keep walking", "clear to cross", "proceed safely"
         ]
-        import re
         for phrase in forbidden_phrases:
             pattern = re.compile(re.escape(phrase), re.IGNORECASE)
             if pattern.search(speech):
@@ -306,16 +395,37 @@ class OnlineVisionService:
             return {"success": False, "spoken_name": speech, "error": res.get("error")}
 
         data = res.get("data", {})
-        denom = data.get("denomination_inr")
-        uncertain = data.get("uncertain", False) or data.get("confidence") == "low"
+        denom_raw = data.get("denomination_inr")
+        confidence = str(data.get("confidence", "")).lower()
+        uncertain = bool(data.get("uncertain", False)) or confidence not in ("high", "medium")
 
-        if denom is not None and not uncertain:
-            spoken = data.get("spoken_name") or f"{denom} rupees"
+        valid_denom = None
+        if denom_raw is not None and not uncertain:
+            try:
+                # Handle possible string or float numerals (e.g. "100" or 100.0)
+                float_val = float(denom_raw)
+                if float_val.is_integer() and int(float_val) in VALID_INR_DENOMINATIONS:
+                    valid_denom = int(float_val)
+                else:
+                    logger.warning(f"Rejecting unsupported or fractional banknote denomination: {denom_raw}")
+            except (ValueError, TypeError):
+                logger.warning(f"Could not parse banknote denomination: {denom_raw}")
+
+        if valid_denom is not None:
+            denom_names = {
+                10: "Ten rupees",
+                20: "Twenty rupees",
+                50: "Fifty rupees",
+                100: "One hundred rupees",
+                200: "Two hundred rupees",
+                500: "Five hundred rupees",
+            }
+            spoken = data.get("spoken_name") or denom_names.get(valid_denom, f"{valid_denom} rupees")
             return {
                 "success": True,
                 "currency": {
-                    "denomination": int(denom),
-                    "confidence": data.get("confidence", "high"),
+                    "denomination": valid_denom,
+                    "confidence": confidence,
                     "spoken_name": spoken,
                     "visible_side": data.get("visible_side", "unknown"),
                     "reason": data.get("reason", ""),

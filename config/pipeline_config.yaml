@@ -26,7 +26,7 @@ perception:
   
   tof_fusion:
     calibration_file: "config/geometry_calibration.yaml"
-    calibration_verified: true # Verified for current device bench setup
+    calibration_verified: false # Requires physical measurement with scripts/calibrate_camera_geometry.py
     cone_half_angle_deg: 13.5   # VL53L1X 27 degree full cone
     min_distance_m: 0.05
     max_distance_m: 4.00

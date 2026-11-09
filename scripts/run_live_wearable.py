@@ -181,11 +181,14 @@ def build_hardware_stack(
                 print(f"    [!] VL53L1X I2C unavailable ({e}). Navigation will remain NOT READY.")
                 distance_sensor = UnavailableDistanceSensor()
 
-            pin_b1 = trig_cfg.get("pin_button_narration", 17)
-            pin_b2 = trig_cfg.get("pin_button_currency_ocr", 27)
-            print(f"    -> Tactile Input: Push Buttons on GPIO {pin_b1} (Narration) and GPIO {pin_b2} (Currency/OCR)")
+            pin_b1 = trig_cfg.get("pin_button_1", trig_cfg.get("pin_button_narration", 17))
+            pin_b2 = trig_cfg.get("pin_button_2", trig_cfg.get("pin_button_currency", trig_cfg.get("pin_button_currency_ocr", 27)))
+            pin_b3 = trig_cfg.get("pin_button_3", trig_cfg.get("pin_button_reading", 22))
+            print(f"    -> Tactile Input: Push Buttons on GPIO {pin_b1} (Narration), GPIO {pin_b2} (Currency), GPIO {pin_b3} (Text)")
             try:
-                trigger_input = GPIOPushButtonTrigger(pin_button_1=pin_b1, pin_button_2=pin_b2)
+                trigger_input = GPIOPushButtonTrigger(
+                    pin_button_1=pin_b1, pin_button_2=pin_b2, pin_button_3=pin_b3
+                )
             except Exception:
                 print("    [!] GPIO library unavailable. Falling back to synthetic trigger input.")
                 trigger_input = SyntheticTriggerInput()

@@ -86,7 +86,9 @@ class DrishtiMasterPipeline:
         online_cfg = cognitive.get("online_vision", {})
         self.online_vision = OnlineVisionService(
             provider=online_cfg.get("provider"),
-            timeout_s=float(online_cfg.get("timeout_s", 8.0)),
+            openai_model=online_cfg.get("openai_model"),
+            gemini_model=online_cfg.get("gemini_model"),
+            timeout_s=float(online_cfg.get("timeout_s", 12.0)),
             synthetic_mode=is_synthetic,
         )
 
@@ -132,25 +134,32 @@ class DrishtiMasterPipeline:
             _, frame = self.camera.read_frame()
         return None if frame is None else frame.copy()
 
+    def _redact_frame(
+        self, frame: np.ndarray, obstacles: Optional[list[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """Apply face and vehicle license plate redaction to protect edge privacy."""
+        if not self.privacy_enabled:
+            return {"image": frame, "faces_redacted": 0, "plates_redacted": 0}
+        obs = obstacles or []
+        person_boxes = [o["bbox"] for o in obs if o.get("class_name") == "person" and "bbox" in o]
+        vehicle_boxes = [
+            o["bbox"]
+            for o in obs
+            if o.get("class_name") in ("car", "truck", "bus", "motorcycle", "bicycle") and "bbox" in o
+        ]
+        return self.anonymizer.anonymize_frame(
+            frame, extra_face_boxes=person_boxes, vehicle_boxes=vehicle_boxes
+        )
+
     def _handle_cognitive_task(self, task: CognitiveTask) -> Dict[str, Any]:
         frame = task.payload["frame"]
+        obstacles = task.payload.get("obstacles", [])
+        redacted = self._redact_frame(frame, obstacles)
+        cloud_frame = redacted["image"]
+
         if task.kind == "narration":
-            obstacles = task.payload.get("obstacles", [])
-            person_boxes = [o["bbox"] for o in obstacles if o.get("class_name") == "person" and "bbox" in o]
-            vehicle_boxes = [
-                o["bbox"]
-                for o in obstacles
-                if o.get("class_name") in ("car", "truck", "bus", "motorcycle", "bicycle") and "bbox" in o
-            ]
-            redacted = (
-                self.anonymizer.anonymize_frame(
-                    frame, extra_face_boxes=person_boxes, vehicle_boxes=vehicle_boxes
-                )
-                if self.privacy_enabled
-                else {"image": frame, "faces_redacted": 0, "plates_redacted": 0}
-            )
             output = self.online_vision.describe_scene(
-                redacted["image"],
+                cloud_frame,
                 obstacles,
                 navigation_authoritative=bool(task.payload.get("navigation_authoritative", False)),
                 path_state=str(task.payload.get("path_state", "unknown")),
@@ -174,15 +183,21 @@ class DrishtiMasterPipeline:
             }
 
         if task.kind == "currency":
-            output = self.online_vision.identify_currency(frame)
+            output = self.online_vision.identify_currency(cloud_frame)
             curr = output.get("currency", {})
             spoken = curr.get("spoken_name") or output.get("spoken_name") or "No banknote detected."
             if self.speech_enabled:
                 self.speech_service.speak(spoken, play_audio=True)
-            return {"success": output.get("success", False), "currency": curr, "spoken_name": spoken}
+            return {
+                "success": output.get("success", False),
+                "currency": curr,
+                "spoken_name": spoken,
+                "faces_redacted": redacted.get("faces_redacted", 0),
+                "plates_redacted": redacted.get("plates_redacted", 0),
+            }
 
         if task.kind in ("reading", "text_reading"):
-            output = self.online_vision.read_text(frame)
+            output = self.online_vision.read_text(cloud_frame)
             text = output.get("text", "").strip()
             spoken = output.get("spoken_name") or (text if text else "No clear text detected.")
             if self.speech_enabled:
@@ -192,24 +207,26 @@ class DrishtiMasterPipeline:
                 "ocr": output,
                 "text": text,
                 "spoken_name": spoken,
+                "faces_redacted": redacted.get("faces_redacted", 0),
+                "plates_redacted": redacted.get("plates_redacted", 0),
             }
 
         # Backward compatibility for legacy tests
         if task.kind == "reading_or_currency":
-            curr_out = self.online_vision.identify_currency(frame)
+            curr_out = self.online_vision.identify_currency(cloud_frame)
             curr = curr_out.get("currency", {})
             if curr.get("denomination") is not None:
                 if self.speech_enabled:
                     self.speech_service.speak(curr["spoken_name"], play_audio=True)
                 return {"success": True, "currency": curr}
-            text_out = self.online_vision.read_text(frame)
+            text_out = self.online_vision.read_text(cloud_frame)
             text = text_out.get("text", "").strip()
             if self.speech_enabled:
                 self.speech_service.speak(text if text else "No clear text detected.", play_audio=True)
             return {"success": True, "ocr": text_out}
 
         if task.kind == "continuous_currency":
-            output = self.online_vision.identify_currency(frame)
+            output = self.online_vision.identify_currency(cloud_frame)
             curr = output.get("currency", {})
             if curr.get("denomination") is not None:
                 if self.speech_enabled:
@@ -245,7 +262,9 @@ class DrishtiMasterPipeline:
         if self.continuous_currency and not self._currency_pending and self.cycle_count % self.currency_interval == 0:
             frame = self._frame()
             if frame is not None and time.time() - self.last_currency_announcement_time >= self.currency_cooldown_s:
-                self._currency_pending = self.cognitive_worker.submit("continuous_currency", {"frame": frame})
+                self._currency_pending = self.cognitive_worker.submit(
+                    "continuous_currency", {"frame": frame, "obstacles": list(self.confirmed_obstacles)}
+                )
 
         if self.trigger_input.poll_trigger(button_id=1):
             frame = self._frame()
@@ -266,14 +285,18 @@ class DrishtiMasterPipeline:
             frame = self._frame()
             if self.speech_enabled and self.mode != "simulation":
                 self.speech_service.speak("Checking banknote...", play_audio=True)
-            queued = frame is not None and self.cognitive_worker.submit("currency", {"frame": frame})
+            queued = frame is not None and self.cognitive_worker.submit(
+                "currency", {"frame": frame, "obstacles": list(self.confirmed_obstacles)}
+            )
             cycle_result["events"].append({"type": "CURRENCY_TRIGGERED", "queued": queued})
 
         if self.trigger_input.poll_trigger(button_id=3):
             frame = self._frame()
             if self.speech_enabled and self.mode != "simulation":
                 self.speech_service.speak("Reading text...", play_audio=True)
-            queued = frame is not None and self.cognitive_worker.submit("reading", {"frame": frame})
+            queued = frame is not None and self.cognitive_worker.submit(
+                "reading", {"frame": frame, "obstacles": list(self.confirmed_obstacles)}
+            )
             cycle_result["events"].append({"type": "TEXT_READING_TRIGGERED", "queued": queued})
 
         now = time.time()

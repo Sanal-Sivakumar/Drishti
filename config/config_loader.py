@@ -98,6 +98,24 @@ def validate_pipeline_config(data: Dict[str, Any]) -> None:
     cog = data.get("cognitive")
     if not isinstance(cog, dict):
         raise ConfigValidationError("Missing required 'cognitive' configuration block.")
+    online = cog.get("online_vision")
+    if online is not None:
+        if not isinstance(online, dict):
+            raise ConfigValidationError("cognitive.online_vision must be a mapping.")
+        prov = online.get("provider")
+        if prov is not None and prov not in ("auto", "openai", "gemini"):
+            raise ConfigValidationError(
+                f"Invalid cognitive.online_vision.provider: '{prov}' (expected one of auto, openai, gemini)."
+            )
+        openai_m = online.get("openai_model")
+        if openai_m is not None and (not isinstance(openai_m, str) or not openai_m.strip()):
+            raise ConfigValidationError("cognitive.online_vision.openai_model must be a non-empty string.")
+        gemini_m = online.get("gemini_model")
+        if gemini_m is not None and (not isinstance(gemini_m, str) or not gemini_m.strip()):
+            raise ConfigValidationError("cognitive.online_vision.gemini_model must be a non-empty string.")
+        timeout = online.get("timeout_s")
+        if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
+            raise ConfigValidationError("cognitive.online_vision.timeout_s must be a positive number.")
 
     # 5. Safety subsystem
     safety = data.get("safety")
@@ -180,7 +198,13 @@ def get_pipeline_config(config_path: Optional[str] = None, validate: bool = True
             resolved = PROJECT_ROOT / resolved
         if resolved.exists():
             calibration = load_yaml(resolved)
-            if calibration.get("verified"):
+            is_verified = bool(calibration.get("verified", False))
+            has_essential = (
+                calibration.get("camera_focal_length_x_px") is not None
+                and calibration.get("principal_point_x") is not None
+                and int(calibration.get("sample_count", 0)) > 0
+            )
+            if is_verified and has_essential:
                 mapping = {
                     "camera_focal_length_x_px": "camera_focal_length_px",
                     "camera_focal_length_y_px": "camera_focal_length_y_px",
@@ -196,6 +220,18 @@ def get_pipeline_config(config_path: Optional[str] = None, validate: bool = True
                     if value is not None:
                         fusion[target_key] = value
                 fusion["calibration_verified"] = True
+            else:
+                if fusion.get("calibration_verified"):
+                    logger.warning(
+                        f"Overriding calibration_verified to False: {calibration_path} is unverified or incomplete."
+                    )
+                fusion["calibration_verified"] = False
+        else:
+            if fusion.get("calibration_verified"):
+                logger.warning(
+                    f"Overriding calibration_verified to False: calibration_file {calibration_path} does not exist."
+                )
+            fusion["calibration_verified"] = False
     if validate:
         validate_pipeline_config(data)
     return data

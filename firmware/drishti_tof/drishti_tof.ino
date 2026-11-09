@@ -3,13 +3,13 @@
  * ---------------------------------
  * Board:  ESP32 DevKit V1 (30-pin, CP2102/CH340 USB-UART)
  * Sensor: VL53L0X time-of-flight range finder (I2C, address 0x29)
- * Inputs: two momentary push buttons to GND (internal pull-ups)
+ * Inputs: three momentary push buttons to GND (internal pull-ups: GPIO32 Button 1, GPIO33 Button 2, GPIO25 Button 3)
  *
  * Responsibilities
  *   - Own the deterministic VL53L0X ranging loop (20 ms timing budget).
  *   - Reject invalid measurements (range status != 0).
  *   - Median-of-5 + EMA filtering.
- *   - Latch both button edges and stream them over USB serial.
+ *   - Latch button edges (buttons 1, 2, 3) and stream them over USB serial.
  *   - Emit a 1 Hz health line and honour a host heartbeat.
  *
  * Protocol (ASCII CSV, newline terminated, 921600 8N1)

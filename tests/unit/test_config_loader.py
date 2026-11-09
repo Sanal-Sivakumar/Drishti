@@ -62,3 +62,42 @@ def test_invalid_hardware_config_raises_validation_error():
             "trigger_input": {"backend": "synthetic"},
             "audio_output": {"backend": "headless"},
         })
+
+
+def test_unverified_calibration_record_forces_calibration_verified_false():
+    """Verify that unverified geometry calibration forces calibration_verified to False."""
+    cfg = get_pipeline_config(validate=True)
+    fusion = cfg["perception"]["tof_fusion"]
+    # Even if pipeline_config specifies calibration_verified: true in other contexts,
+    # the unverified geometry_calibration.yaml record must force it to False.
+    assert fusion["calibration_verified"] is False
+
+
+def test_invalid_online_vision_config_raises_validation_error():
+    """Verify invalid online_vision settings raise ConfigValidationError."""
+    base_cfg = {
+        "pipeline": {"target_fps": 30, "frame_width": 640, "frame_height": 480},
+        "perception": {"detector": {"confidence_threshold": 0.4}},
+        "safety": {"telemetry": {"buffer_limit": 500}},
+    }
+
+    # Invalid provider
+    with pytest.raises(ConfigValidationError, match="Invalid cognitive.online_vision.provider"):
+        validate_pipeline_config({
+            **base_cfg,
+            "cognitive": {"online_vision": {"provider": "unsupported_provider"}},
+        })
+
+    # Empty model string
+    with pytest.raises(ConfigValidationError, match="openai_model must be a non-empty string"):
+        validate_pipeline_config({
+            **base_cfg,
+            "cognitive": {"online_vision": {"provider": "openai", "openai_model": "   "}},
+        })
+
+    # Invalid timeout
+    with pytest.raises(ConfigValidationError, match="timeout_s must be a positive number"):
+        validate_pipeline_config({
+            **base_cfg,
+            "cognitive": {"online_vision": {"provider": "openai", "timeout_s": -5.0}},
+        })
