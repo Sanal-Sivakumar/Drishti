@@ -363,6 +363,8 @@ class SpeechService:
             backend, played = self._speak_piper(text)
             if played:
                 return backend, True
+            if self._stopping.is_set():
+                return backend, False
             logger.warning("Piper playback failed; falling back to system speech.")
 
         if self.has_spdsay:
@@ -422,7 +424,8 @@ class SpeechService:
                 timeout=timeout,
             )
             if returncode != 0 or not Path(wav_path).is_file() or Path(wav_path).stat().st_size == 0:
-                logger.warning("Piper synthesis failed (rc=%s): %s", returncode, stderr.strip()[:200])
+                if not self._stopping.is_set() and returncode not in (-15, -9):
+                    logger.warning("Piper synthesis failed (rc=%s): %s", returncode, stderr.strip()[:200])
                 return "piper", False
 
             for player in playback_commands(wav_path):
