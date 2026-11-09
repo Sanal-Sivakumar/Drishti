@@ -581,22 +581,27 @@ def main() -> None:
             for ev in res.get("events", []):
                 ev_type = ev.get("type")
                 if ev_type == "SCENE_NARRATION_TRIGGERED":
-                    print("\n  >>> [BUTTON 1 PRESSED] Scene Narration queued for Gemini Vision...")
+                    print("\n  >>> [BUTTON 1 PRESSED] Capturing frame & querying Gemini Vision for Scene Narration...")
                 elif ev_type == "CURRENCY_TRIGGERED":
-                    print("\n  >>> [BUTTON 2 PRESSED] Banknote Identification queued for Gemini Vision...")
+                    print("\n  >>> [BUTTON 2 PRESSED] Capturing frame & querying Gemini Vision for Banknote Identification...")
                 elif ev_type == "TEXT_READING_TRIGGERED":
-                    print("\n  >>> [BUTTON 3 PRESSED] Multilingual Text Reading queued for Gemini Vision...")
+                    print("\n  >>> [BUTTON 3 PRESSED] Capturing frame & querying Gemini Vision for Text Reading (OCR)...")
 
             # Cognitive results (Scene narration, Banknote, OCR)
             for cognitive in res.get("cognitive_results", []):
-                if "narration" in cognitive:
-                    print(f"  >>> [SCENE NARRATION] Spoken: \"{cognitive['narration']}\"")
-                elif cognitive.get("currency", {}).get("denomination") is not None:
-                    c = cognitive["currency"]
-                    print(f"  >>> [CURRENCY] Spoken: \"{c['spoken_name']}\" (Confidence: {c.get('confidence', 'high')})")
-                elif "ocr" in cognitive or "text" in cognitive:
+                kind = cognitive.get("kind")
+                if "narration" in cognitive or kind == "narration":
+                    print(f"  >>> [SCENE NARRATION] Spoken: \"{cognitive.get('narration') or cognitive.get('spoken_name')}\"")
+                elif "currency" in cognitive or kind == "currency":
+                    c = cognitive.get("currency", {})
+                    spoken = c.get("spoken_name") or cognitive.get("spoken_name") or "No banknote detected."
+                    denom = c.get("denomination")
+                    conf = c.get("confidence", "high") if denom is not None else "n/a"
+                    print(f"  >>> [BANKNOTE IDENTIFICATION] Spoken: \"{spoken}\" (Denomination: ₹{denom if denom else 'None'}, Confidence: {conf})")
+                elif "ocr" in cognitive or "text" in cognitive or kind in ("reading", "text_reading"):
                     txt = cognitive.get("text") or cognitive.get("ocr", {}).get("text")
-                    print(f"  >>> [TEXT READING] Spoken: \"{txt or 'No clear text detected.'}\"")
+                    spoken = cognitive.get("spoken_name") or (txt if txt else "No clear text detected.")
+                    print(f"  >>> [TEXT READING (OCR)] Spoken: \"{spoken}\"")
                 elif cognitive.get("spoken_name"):
                     print(f"  >>> [COGNITION] Spoken: \"{cognitive['spoken_name']}\"")
 
