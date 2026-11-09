@@ -1,7 +1,7 @@
 # Drishti ESP32 sensor MCU
 
 Firmware for the ESP32 DevKit V1 that owns the VL53L0X ranging loop and the
-two tactile buttons, and streams them to the laptop/Pi over USB serial.
+three tactile buttons, and streams them to the laptop/Pi over USB serial.
 
 This is the **current prototype sensor MCU**, not the proposed product depth architecture. VL53L0X is a single-zone, forward range source; it cannot detect a complete corridor, curbs/drop-offs outside its ray, or overhead hazards. The future roadmap evaluates multizone/dense depth, a downward channel, IMU synchronization, and an independent safety watchdog; see [`../../docs/INDUSTRY_ROADMAP.md`](../../docs/INDUSTRY_ROADMAP.md).
 
@@ -35,7 +35,7 @@ ASCII CSV, newline terminated, **921600 8N1**.
 
 - `st = 0` means a valid VL53L0X measurement. Any other value must be
   discarded by the host.
-- `btn` bit 0 = GPIO32 (narration), bit 1 = GPIO33 (currency/OCR).
+- `btn` bit 0 = GPIO32 (Scene Narration), bit 1 = GPIO33 (Banknote Identification), bit 2 = GPIO25 (Multilingual Text Reading).
 - `mm_f` is the filtered value; `mm_raw` is retained for calibration.
 
 ---

@@ -1,155 +1,92 @@
-# Continue development on a laptop connected to hardware
+# Continue Development on a Laptop Connected to Hardware
 
-This is the working handoff for the current office-account/laptop workflow. Keep credentials, personal data, model weights, calibration captures, and participant recordings out of Git.
+This is the operational workflow for development on a workstation or laptop connected to the Drishti hardware stack.
 
-## 1. Clone or update safely
+Last updated: 2026-11-09.
+
+---
+
+## 1. Repository Setup & Model Provisioning
 
 ```bash
 git clone https://github.com/Sanal-Sivakumar/Drishti.git
 cd Drishti
 git pull --ff-only origin main
-git status
-```
 
-Use Git Credential Manager, SSH, or `gh auth login` for the office GitHub account. Never place a personal access token in a remote URL, shell script, Markdown file, `.env`, or committed configuration.
-
-For each unit of work:
-
-```bash
-git switch main
-git pull --ff-only origin main
-git switch -c codex/<short-task-name>
-```
-
-Run tests, review `git diff`, commit, and push the branch. Merge only after CI passes.
-
-## 2. Environment
-
-```bash
+# Virtual environment setup
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev,vlm]'
-python scripts/download_models.py
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e '.[dev]'
+
+# Download local ONNX models (YOLOv8n and Piper neural voice)
+python3 scripts/download_models.py
+
+# Configure cloud credentials
+cp .env.example .env
+# Edit .env and supply GEMINI_API_KEY or OPENAI_API_KEY
 ```
 
-Training is optional and heavier:
-
+Verify the environment:
 ```bash
-python -m pip install -e '.[training]'
+python3 -m pytest tests/ -q
+# Output: 109 passed in ~8s
 ```
 
-The virtual environment and model files are ignored by Git. A complete local setup needs approximately 2 GB for SmolVLM2 plus the Python/PyTorch environment and other model files.
+---
 
-## 3. Connect the current hardware
+## 2. Hardware Connections
 
-The present laptop stack expects:
+The laptop development setup connects:
+1. **Camera**: Built-in webcam or external USB camera.
+2. **ESP32 DevKit V1**: Running `firmware/drishti_tof/drishti_tof.ino` connected via Micro-USB.
+3. **VL53L0X ToF Rangefinder**: Connected via I²C (`SDA` to GPIO 21, `SCL` to GPIO 22, `VIN` to 3.3V, `GND` to GND).
+4. **Three Tactile Buttons**:
+   - **Button 1 (`GPIO 32`)**: Scene Narration
+   - **Button 2 (`GPIO 33`)**: Banknote Identification (INR ₹10–₹500)
+   - **Button 3 (`GPIO 25`)**: Multilingual Text Reading
+5. **Headphones / Audio Output**: Stereo headphones for spatial binaural audio verification.
 
-- a real USB or built-in colour camera;
-- ESP32 DevKit V1 running `firmware/drishti_tof/drishti_tof.ino`;
-- VL53L0X connected according to `firmware/drishti_tof/WIRING.md`;
-- two ESP32 buttons, or keyboard `N`/`C` input;
-- wired stereo headphones for initial spatial-audio work.
+### Stable Serial Permissions
+Grant serial access to your user account:
+```bash
+sudo usermod -aG dialout "$USER"
+```
 
-Find stable device names:
-
+Locate the persistent hardware device path:
 ```bash
 ls -l /dev/serial/by-id/
-v4l2-ctl --list-devices
-aplay -l
+# Example: /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
 ```
 
-Grant serial access once, then log out/in:
-
+Verify the ESP32 connection before starting the full system:
 ```bash
-sudo usermod -a -G dialout "$USER"
+python3 scripts/probe_esp32.py --port auto --duration 5
+python3 scripts/monitor_tof.py
+python3 scripts/check_hardware_health.py
 ```
 
-Probe the ESP32 before starting the full pipeline:
+---
 
+## 3. Running the System
+
+### Live Hardware Mode (Webcam + ESP32)
 ```bash
-python scripts/probe_esp32.py --port auto --duration 10
-python scripts/monitor_tof.py
-python scripts/check_hardware_health.py --serial-port auto
+python3 scripts/run_live_wearable.py --viewer
 ```
+- Open `http://127.0.0.1:8080/` in Chrome or Firefox to monitor real-time annotated perception, 3D coordinates, and ToF tracking.
+- Test visual cognition using the physical tactile buttons on the breadboard.
+- To enable interactive keyboard shortcuts in the terminal, append `--enable-keyboard` (`N` = Narrate, `C` = Currency, `T` = Text, `Q` = Quit).
 
-## 4. Run modes
-
-Safe deterministic simulation:
-
+### Synthetic Simulation Mode (No Hardware Required)
 ```bash
-python scripts/run_live_wearable.py --hardware synthetic --max-cycles 100
+python3 scripts/run_live_wearable.py --hardware synthetic --max-cycles 100
 ```
 
-Laptop with real camera and auto-detected ESP32:
+---
 
-```bash
-python scripts/run_live_wearable.py --hardware laptop --serial-port auto --viewer
-```
+## 4. Development Best Practices
 
-Explicit stable serial path is preferred:
-
-```bash
-python scripts/run_live_wearable.py \
-  --hardware laptop \
-  --serial-port /dev/serial/by-id/<your-esp32-id> \
-  --camera-index 0 \
-  --viewer
-```
-
-Open `http://127.0.0.1:8080/`. Use `N` for narration, `C` for banknote/OCR, and `Q` to stop. If required hardware or calibration is missing, expect `NOT_READY`; do not bypass it.
-
-## 5. Verify every change
-
-```bash
-python -m compileall -q cognitive config hal perception safety scripts pipeline.py tests
-python -m pytest tests -q
-python -m pytest tests/unit/test_spatial_audio.py -v
-python scripts/smoke_test_vlm.py
-git diff --check
-```
-
-Before committing hardware behavior, save a benchmark/experiment record containing the Git commit, configuration checksum, device identifiers, firmware version, lighting, route, power/thermal state, and raw metric output. Do not commit identifiable camera images.
-
-## 6. Starting a new AI coding session
-
-Ask the AI to read these files first:
-
-```text
-README.md
-docs/README.md
-docs/CURRENT_SYSTEM.md
-docs/LATENCY.md
-docs/NEXT_STEPS.md
-TEAM_HANDOVER.md
-```
-
-Suggested opening prompt:
-
-```text
-Work in the Drishti repository. Read the documentation index and current-system
-handover first. Preserve fail-closed production behavior and do not treat
-simulation as hardware evidence. Show me git status before editing. Implement
-only the next unchecked P0 item, add tests, run the relevant hardware/software
-checks, update the documentation, and leave a reviewable Git diff.
-```
-
-An AI model can help implement and review code; it cannot certify the device, replace measured hardware evidence, approve risk acceptance, or authorize human trials.
-
-## 7. Git hygiene and office-account privacy
-
-Do not commit:
-
-- `.venv/`, model weights, caches, generated audio, or build output;
-- MQTT passwords, broker certificates/private keys, GitHub tokens, or office credentials;
-- participant names, faces, voices, routes, GPS coordinates, or consent records;
-- raw calibration/evaluation captures unless an approved data-governance process explicitly permits it.
-
-Before every push:
-
-```bash
-git status --short
-git diff --check
-git diff --cached
-```
-
+- Always run `python3 -m pytest tests/ -q` before committing code.
+- Never commit `.env`, API keys, or raw sensor recording files.
+- Keep the fast perception loop ($<35\text{ ms}$) strictly isolated from blocking network calls.

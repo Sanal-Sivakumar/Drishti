@@ -7,9 +7,10 @@ Last reviewed: 2026-11-08.
 | Path | Current evidence | Interpretation |
 |---|---|---|
 | Synthetic perception cycle | Automated test requires mean below 50 ms and at least 20 FPS | Software regression guard only; it is not a physical-device benchmark |
-| SmolVLM2 on the development laptop | Real local smoke run: approximately 9.1 seconds | Too slow for live navigation; acceptable only as optional on-demand description after freshness controls |
+| Gemini 3.1 Flash-Lite (OnlineVisionService) | Measured cloud round-trip: ~1.5–1.8 seconds (thinkingBudget: 0) | Acceptable for on-demand contextual description with immediate audible confirmation |
+| SmolVLM2 (Local fallback on laptop) | Real local smoke run: approximately 9.1 seconds | Too slow for live navigation; acceptable only as optional offline on-demand fallback |
 | Nominal camera/loop setting | 30 FPS / 33.3 ms frame interval | The current main loop sleeps 33.3 ms after processing, so actual period is processing time plus sleep time |
-| ESP32/VL53L0X | Firmware timing budget 33 ms; host stale threshold 120 ms | Sensor-level settings, not an end-to-end audible latency result |
+| ESP32/VL53L0X | Firmware timing budget 33 ms; host stale threshold 100 ms | Sensor-level settings, not an end-to-end audible latency result |
 | Audio | 60 ms cues, non-blocking bounded output queue | Enqueue-to-ear time has not been measured |
 
 No p50/p95/p99 hardware latency dataset exists yet.

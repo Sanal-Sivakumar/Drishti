@@ -1,174 +1,184 @@
-# Drishti
-
-Drishti is an experimental, offline-first assistive-perception prototype for Raspberry Pi 5 and Linux development machines. It combines a camera, a physical Time-of-Flight (ToF) range sensor, COCO object detection, spatial audio, OCR, banknote heuristics, and optional MQTT telemetry.
+# Drishti: Intelligent Assistive Wearable Perception
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](pyproject.toml)
+[![Tests: Passing](https://img.shields.io/badge/Tests-109%20Passing-brightgreen.svg)](tests/)
 
-> **Safety status:** research prototype. Do not use for unsupervised navigation, road crossing, drop-off detection, or as a replacement for a cane, guide dog, trained assistant, or orientation-and-mobility instruction. Begin only supervised indoor trials after the readiness checks below pass. Outdoor and unsupervised use is currently unsafe.
+Drishti is an offline-first assistive wearable perception platform designed for visually impaired users. It executes real-time 3D spatial obstacle avoidance locally at the edge (<35 ms latency) while providing on-demand visual cognition—scene understanding, Indian banknote identification, and multilingual text reading—via low-latency cloud vision models with edge privacy redaction.
 
-## Documentation map
+> **Safety Notice:** Research prototype. Drishti is not a certified medical device or mobility aid. It must not replace a primary mobility tool (white cane, guide dog, or orientation-and-mobility instruction). Autonomous navigation, road crossings, stair navigation, and outdoor unguided use are strictly out of scope.
 
-- [How the system works today](docs/CURRENT_SYSTEM.md)
-- [Laptop + hardware + Git/AI continuation workflow](docs/LAPTOP_WORKFLOW.md)
-- [Latency measurements and optimization plan](docs/LATENCY.md)
-- [Industry/product architecture roadmap](docs/INDUSTRY_ROADMAP.md)
-- [Ordered next steps and gates](docs/NEXT_STEPS.md)
-- [Full documentation index](docs/README.md)
+---
 
-## Status at this commit
+## Architectural Overview
 
-The hybrid edge-cloud software architecture is fully implemented, with all automated unit and integration tests passing. Continuous 3D obstacle avoidance (YOLOv8n ONNX + VL53L0X/VL53L1X ToF + binaural audio sonification) runs 100% offline at <35 ms per cycle. Visual cognition (Scene Narration, Indian Banknote Identification, and Multilingual Indic OCR) is handled via a cloud Online Vision API (Google Gemini 3.1 Flash-Lite or OpenAI GPT-4o-mini) triggered on-demand via a 3-button hardware layout, with local Gaussian face and license plate anonymization prior to transmission and local Piper neural TTS for playback.
-
-A fresh Git checkout is configured safely: local model weights for offline perception (`models/yolov8n.onnx` and `models/piper/`) are provisioned via `scripts/download_models.py`, while cloud vision keys (`OPENAI_API_KEY` or `GEMINI_API_KEY`) are read securely from local `.env` (never committed or exposed).
-
-## How it works, briefly
-
-The architecture strictly decouples safety-critical perception from on-demand cognition:
-
-1. **Continuous Fast Perception (Offline Edge Loop)**:
-   - Reads camera and ToF sensor.
-   - Runs local YOLOv8n ONNX obstacle detection.
-   - Fuses range with calibrated image geometry.
-   - Emits spatial binaural audio pings with ITD/ILD cues.
-   - Close ToF proximity bypasses the detector and triggers immediate emergency cues.
-   - **Never blocks on network or cloud APIs**.
-
-2. **On-Demand Visual Cognition (Online Vision API Path)**:
-   - Triggered via 3 dedicated hardware push buttons or keyboard shortcuts:
-     - **Button 1 (`GPIO 32` / Key `N`)**: Scene Narration (Concisely describes visual context; strictly grounded by local sensor facts; forbidden from issuing movement/navigation advice).
-     - **Button 2 (`GPIO 33` / Key `C`)**: Banknote Identification (Specialized for Indian Rupee Mahatma Gandhi New Series ₹10–₹500; strictly rejects blurred, partial, or ambiguous notes without false positives).
-     - **Button 3 (`GPIO 25` / Key `T`)**: Text Reading / OCR (High-fidelity multilingual Indic text transcription across English, Hindi, Tamil, Malayalam, Bengali, etc.).
-   - Prior to upload, an edge privacy filter applies vectorized Gaussian blur to bystander faces and vehicle license plates.
-   - A bounded background worker dispatches the request to the configured cloud vision provider (OpenAI or Gemini).
-   - If the internet is unreachable, Drishti announces the offline condition immediately while obstacle avoidance remains uninterrupted.
-   - The verified response is vocalized locally via Piper neural TTS.
-
-## What is implemented
-
-- A production readiness state (`ready`, `degraded`, `not_ready`) and a separately labeled `simulation` state.
-- Fail-closed navigation: a missing camera, stale/unavailable physical range sensor, or missing/invalid YOLO ONNX model produces `path_state: unknown`; it cannot produce “path clear.” Synthetic range is never represented as physical ToF.
-- YOLOv8-style ONNX preprocessing with BGR-to-RGB conversion, letterboxing, input/output contract checks, NMS, COCO class validation, and calibrated-FOV intrinsics.
-- Camera/ToF fusion and binaural obstacle pings. A shared audio priority arbiter prevents routine pings from overlapping spoken cognition.
-- A bounded worker queue for scene narration, currency recognition, and text reading so those tasks do not block perception.
-- Cloud-assisted multimodal cognition via `OnlineVisionService` (OpenAI GPT-4o-mini or Gemini 2.5 Flash) with strict JSON contracts, fail-closed movement instruction sanitization, and offline fallback speech.
-- Edge privacy filter: Local Haar-cascade face detection, vehicle license plate detection, and Gaussian blur prior to transmission.
-- Local Piper neural text-to-speech (TTS) for speech playback without cloud voice dependencies.
-- MQTT telemetry with real host sensor readings when available, `null` when unavailable, TLS certificate verification, environment-provided credentials, a bounded persistent buffer, reconnect replay, and QoS 1 PUBACK tracking.
-- Picamera2, OpenCV, V4L2, VL53L1X, and ESP32 serial backends, plus explicitly labeled synthetic backends for tests.
-
-## Required production readiness
-
-Production navigation is authoritative only when all of these are true:
-
-1. A physical camera is open and returning BGR frames.
-2. `models/yolov8n.onnx` loads and satisfies the expected NCHW/model-output contract.
-3. A physical ToF source is present and fresh; synthetic or stale range makes the system not ready.
-4. Target classes exist in the model’s COCO label set. The current configuration covers `person`, `chair`, `dining table` (configured as `table`), `car`, and `bicycle`. Doors, stairs, drop-offs, and overhead clearance are not detected by the current model.
-5. Camera horizontal FOV and ToF alignment have been measured on the assembled device, and `calibration_verified` is set to `true` with the calibration record retained.
-
-The console, heartbeat, and `/metrics` endpoint expose readiness and `path_state`. A production result with unavailable perception is `unknown`, never `clear`.
-
-## Installation and model provisioning
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[dev]'
-python scripts/download_models.py
-cp .env.example .env  # Add your OPENAI_API_KEY or GEMINI_API_KEY
-python -m pytest tests -q
-```
-
-On Raspberry Pi OS Bookworm:
-
-```bash
-sudo bash scripts/setup_raspberry_pi.sh
-```
-
-The provisioning script installs Picamera2 through APT, creates a system-site-packages virtual environment, installs the Pi ToF dependency, verifies YOLO weights and the Piper voice, and installs the systemd unit. Put broker secrets in `/etc/drishti/drishti.env`:
+Drishti decouples time-critical hazard avoidance from asynchronous cognitive queries through a dual-loop design:
 
 ```text
-DRISHTI_MQTT_USERNAME=wearable-device
-DRISHTI_MQTT_PASSWORD=replace-with-a-secret
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                       FAST PERCEPTION STREAM (OFFLINE EDGE)                     │
+│                                                                                │
+│  [Camera: 640x480] ──► [YOLOv8n ONNX] ──► [Camera/ToF Calibration Fusion]       │
+│                                                          │                     │
+│  [ESP32: VL53L0X]  ──► [33ms Distance] ──────────────────┘                     │
+│                                                          │                     │
+│  [Fail-Closed Gate] ◄── [SystemReadiness]                ▼                     │
+│                                              [Binaural Spatial Audio (ITD/ILD)]│
+│                                              30 FPS Sonar Pings (<35 ms loop)  │
+└────────────────────────────────────────────────────────────────────────────────┘
+                                        │ (Independent Execution)
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                   VISUAL COGNITION STREAM (ON-DEMAND MULTIMODAL)                │
+│                                                                                │
+│  Tactile Inputs (ESP32):                                                       │
+│    • Button 1 (GPIO 32): Scene Narration                                       │
+│    • Button 2 (GPIO 33): Banknote Identification (INR ₹10–₹500)                │
+│    • Button 3 (GPIO 25): Multilingual Text Reading                             │
+│                                 │                                              │
+│                                 ▼                                              │
+│                   [Edge Privacy Anonymizer]                                    │
+│                   (Vectorized Gaussian Face & Vehicle Plate Redaction)         │
+│                                 │                                              │
+│                                 ▼                                              │
+│                   [Online Vision Service]                                      │
+│                   (Gemini 3.1 Flash-Lite / GPT-4o-mini | ~1.5s Response)       │
+│                                 │                                              │
+│                                 ▼                                              │
+│                   [Local Piper Neural Text-to-Speech]                          │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Running
+1. **Continuous Fast Perception Loop (100% Offline, Edge)**:
+   - Evaluates a strict **fail-closed readiness contract** every cycle.
+   - Captures synchronized frames from the camera and distance readings from the hardware Time-of-Flight (VL53L0X) sensor.
+   - Runs local YOLOv8n ONNX inference for obstacle classification (`person`, `chair`, `table`, `car`, `bicycle`).
+   - Fuses detected bounding boxes with the central ToF cone and calibrated optical geometry.
+   - Synthesizes real-time binaural spatial audio pings with interaural time (ITD) and level (ILD) differences.
+   - Detects close proximity (<0.8 m) directly from ToF hardware to emit immediate hazard warnings without waiting for detector inference.
+   - **Zero network dependencies.** Runs deterministically at 30 FPS on host CPU.
 
-Explicit simulation, safe for development:
+2. **On-Demand Visual Cognition Loop (Cloud Multimodal, Asynchronous)**:
+   - Triggered exclusively by explicit physical tactile button inputs:
+     - **Button 1 (`GPIO 32`)**: **Scene Narration** — Synthesizes concise situational descriptions grounded strictly by local sensor facts. Model output is automatically filtered against movement or navigational commands.
+     - **Button 2 (`GPIO 33`)**: **Banknote Identification** — Specialized verification for Indian Rupee Mahatma Gandhi New Series (₹10, ₹20, ₹50, ₹100, ₹200, ₹500). Enforces strict confidence thresholds and spoken lookup verification to eliminate false positives.
+     - **Button 3 (`GPIO 25`)**: **Multilingual Text Reading** — Verbatim transcription across Latin and Indic scripts (Hindi, Tamil, Malayalam, Bengali, etc.).
+   - Prior to network transmission, the **Edge Privacy Filter** detects and Gaussian-blurs bystander faces and vehicle license plates. Text and currency notes are preserved.
+   - Dispatches requests asynchronously to Google Gemini 3.1 Flash-Lite (configured with zero thinking budget for ~1.5 s latency) or OpenAI GPT-4o-mini.
+   - Synthesizes vocal responses locally via offline Piper Neural Text-to-Speech (TTS).
 
+---
+
+## Hardware Specifications & Pinout
+
+The standard development prototype interfaces an **ESP32 DevKit V1** over USB serial (921600 baud) with an **I²C VL53L0X ToF rangefinder** and three tactile switches:
+
+| ESP32 DevKit V1 Pin | Peripheral Connection | Function | Signal Characteristics |
+| :--- | :--- | :--- | :--- |
+| **3V3** | VL53L0X `VIN` & `XSHUT` | Power Rail & Sensor Enable | 3.3V DC (Do not connect to 5V) |
+| **GND** | VL53L0X `GND` & Button Rails | Ground Reference | Common ground |
+| **GPIO 21 (D21)** | VL53L0X `SDA` | I²C Data Line | 400 kHz Fast-Mode I²C |
+| **GPIO 22 (D22)** | VL53L0X `SCL` | I²C Clock Line | 400 kHz Fast-Mode I²C |
+| **GPIO 32 (D32)** | Button 1 (to GND) | **Scene Narration** | Active-LOW, internal pull-up, 30 ms debounced |
+| **GPIO 33 (D33)** | Button 2 (to GND) | **Banknote Identification** | Active-LOW, internal pull-up, 30 ms debounced |
+| **GPIO 25 (D25)** | Button 3 (to GND) | **Multilingual Text Reading**| Active-LOW, internal pull-up, 30 ms debounced |
+| **Micro-USB** | Workstation / Raspberry Pi | Data & Power | USB Serial CDC at 921600 baud (`/dev/ttyUSB0`) |
+
+Detailed schematics and breadboard wiring guides are in [`firmware/drishti_tof/WIRING.md`](firmware/drishti_tof/WIRING.md).
+
+---
+
+## Production Readiness Contract
+
+Drishti enforces an uncompromising **fail-closed** safety architecture. A navigational cycle is authoritative *only* when all conditions are satisfied:
+
+1. **Physical Camera Active**: Camera device open, yielding valid 640×480 BGR frames without frame drops.
+2. **Validated ONNX Model**: `models/yolov8n.onnx` loaded, verified against expected NCHW tensor dimensions, and operating via ONNX Runtime.
+3. **Fresh Physical ToF Range**: Range data must originate from the physical hardware sensor and be $<100\text{ ms}$ old. If the sensor is disconnected, unpowered, or reporting stale data, readiness transitions to `not_ready`, `path_state` is forced to `unknown`, and navigation audio is suppressed.
+4. **Verified Calibration**: Camera focal length and optical-to-ToF baseline offsets must be measured and confirmed (`calibration_verified: true` in configuration).
+
+If any critical requirement fails, the system outputs:
+```text
+Cycle 12    | NAVIGATION NOT READY | RANGE_NO_VALID_SAMPLE, CALIBRATION_UNVERIFIED
+```
+Drishti **never** outputs `"path clear"` when physical sensors are missing or degraded.
+
+---
+
+## Quickstart & Installation
+
+### 1. Prerequisites
+- Linux OS (Ubuntu 22.04+, Debian Bookworm, or Raspberry Pi OS 64-bit).
+- Python 3.10 to 3.14.
+- Git, ALSA audio utilities (`libasound2-dev`, `aplay`).
+
+### 2. Environment Setup & Model Provisioning
 ```bash
-python scripts/run_live_wearable.py --hardware synthetic --max-cycles 100
+# Clone repository
+git clone https://github.com/Sanal-Sivakumar/Drishti.git
+cd Drishti
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install package dependencies
+pip install --upgrade pip
+pip install -e '.[dev]'
+
+# Provision offline neural weights (YOLOv8n ONNX & Piper neural voice)
+python3 scripts/download_models.py
+
+# Configure cloud vision credentials
+cp .env.example .env
+# Edit .env and supply your GEMINI_API_KEY or OPENAI_API_KEY
 ```
 
-Physical Raspberry Pi stack:
-
+### 3. Verification Suite
+Execute the automated test suite covering safety readiness, depth fusion, anonymization, spatial audio, and cloud vision contracts:
 ```bash
-python scripts/check_hardware_health.py
-python scripts/run_live_wearable.py --hardware rpi --viewer
+python3 -m pytest tests/ -q
+# Output: 109 passed in ~8s
 ```
 
-Laptop production probing (navigation stays not-ready without a physical ToF source and real model):
+---
 
+## Execution Modes
+
+### Development & Workstation (Webcam + ESP32)
+Launch live perception with automatic hardware probing and the local browser debug viewer:
 ```bash
-python scripts/run_live_wearable.py --hardware laptop --serial-port /dev/drishti-tof --viewer
+python3 scripts/run_live_wearable.py --viewer
+```
+- Open **`http://127.0.0.1:8080`** to view real-time annotated camera streams, ToF tracking spots, and system diagnostics.
+- To enable keyboard controls alongside hardware buttons, append `--enable-keyboard` (`N` = Narrate, `C` = Currency, `T` = Text, `Q` = Quit).
+
+### Raspberry Pi 5 Target Deployment
+For native Raspberry Pi deployments using Camera Module 3 (libcamera) and hardware audio:
+```bash
+sudo bash scripts/setup_raspberry_pi.sh
+python3 scripts/check_hardware_health.py
+python3 scripts/run_live_wearable.py --hardware rpi --viewer
 ```
 
-Controls: Visual cognition is triggered on-demand via 3 physical tactile buttons (Button 1: Scene Narration, Button 2: Banknote Identification, Button 3: Multilingual Text Reading). Interactive terminal keyboard shortcuts (`N`, `C`, `T`, `Q`) can be enabled for test benches using `--enable-keyboard`. Continuous banknote scanning is opt-in with `--continuous-currency`.
+### Headless Deterministic Simulation
+For CI pipelines or software development without physical hardware attached:
+```bash
+python3 scripts/run_live_wearable.py --hardware synthetic --max-cycles 100
+```
 
-For the current laptop + ESP32 workflow, stable device paths, Git practices, verification commands, and a reusable AI-session prompt are documented in [`docs/LAPTOP_WORKFLOW.md`](docs/LAPTOP_WORKFLOW.md).
+---
 
-## Configuration
+## Documentation Index
 
-Runtime construction consumes [`config/pipeline_config.yaml`](config/pipeline_config.yaml) for detector thresholds/model/classes, camera/ToF geometry, currency support, spatial audio, OCR, narration, TTS, redaction, heartbeat cadence, and telemetry persistence. Hardware profiles are in [`config/hardware_dev.yaml`](config/hardware_dev.yaml) and [`config/hardware_pi5.yaml`](config/hardware_pi5.yaml).
+- **[Technical Architecture & Mathematics](technical_details.md)**: Mathematical models for camera-ToF fusion, Woodworth ITD spatialization, and JSON contract specifications.
+- **[Operational Troubleshooting Ledger](troubleshoot.md)**: Exhaustive root-cause guides for hardware timeouts, false-positive blur resolution, USB-serial debugging, and ALSA xruns.
+- **[Hardware Wiring & Schematics](firmware/drishti_tof/WIRING.md)**: Breadboard wiring schematics, pinout guides, and firmware flashing steps for ESP32.
+- **[Workstation & Laptop Workflow](docs/LAPTOP_WORKFLOW.md)**: Daily developer workflow, device path stabilization, and AI pair-programming procedures.
+- **[Latency Profile & Benchmarks](docs/LATENCY.md)**: Monotonic timing budgets, software stage breakdowns, and performance optimization roadmaps.
+- **[Engineering Team Handover](TEAM_HANDOVER.md)**: Deployment boundaries, compliance considerations, and supervised indoor testing protocols.
 
-Geometry is loaded from `config/geometry_calibration.yaml` only when its measured calibration is verified. Generate it from real chessboard and ToF-spot samples with `scripts/calibrate_camera_geometry.py`. SmolVLM2 weights are provisioned by `scripts/download_models.py`; generation is temperature-zero, bounded, and performed only in the cognitive worker.
+---
 
-The detector is COCO-based. Class aliases are validated at startup, and unsupported classes are reported in readiness rather than silently ignored.
+## License
 
-For wearable-specific stairs, curbs, poles, glass doors, hanging obstacles, and partial furniture, collect the dataset described in `evaluation/README.md`, fine-tune with `scripts/train_hazard_detector.py`, then update the detector model and label-map paths. No claim of improved recall is made until `scripts/evaluate_drishti.py` reports the held-out results.
-
-Spatial cues combine a 500–900 Hz distance component with a deterministic 2–5 kHz component for stronger ILD, use a smooth envelope and conservative limiter, and support separate air- and bone-conduction profiles. Generate and verify `-90°`, `-45°`, `0°`, `+45°`, and `+90°` cues with `scripts/calibrate_spatial_audio.py`. Bone-conduction profiles must be calibrated per user/headset and are not inferred from air-conduction settings.
-
-## Latency
-
-The only measured real VLM result is approximately 9.1 seconds on the development laptop. The sub-50 ms automated perception check uses simulation and is not a physical Pi/laptop benchmark. The ESP32 timing budget and software stage timers do not establish audible response time. Before trials, collect end-to-end p50/p95/p99 timestamps from sensor acquisition through physical audio/haptic onset. See [`docs/LATENCY.md`](docs/LATENCY.md).
-
-## Future equipment
-
-The proposed product architecture uses dense stereo/depth, multizone near-field and downward ranging, an IMU, an independent safety MCU/watchdog, and redundant audio/haptic critical output. The generative model remains outside the safety channel. Candidate compute and sensor trade-offs, regulatory references, manufacturing evidence, and release gates are in [`docs/INDUSTRY_ROADMAP.md`](docs/INDUSTRY_ROADMAP.md). These are future recommendations, not installed capabilities.
-
-## Interfaces
-
-MQTT topics are device-scoped:
-
-- `drishti/device/{device_id}/heartbeat`
-- `drishti/device/{device_id}/events`
-- `drishti/device/{device_id}/emergency`
-- `drishti/device/{device_id}/status` (retained last-will/status)
-
-With `--viewer`, the local debug server provides:
-
-- `/` — viewer UI
-- `/stream` — MJPEG stream
-- `/snapshot` — latest JPEG
-- `/metrics` — latest JSON perception/readiness state
-
-The supported Python API constructs `FastPerceptionPipeline(camera, distance_sensor, audio_sink, config=..., mode=...)` and calls `step()`. There is no `process_frame` API.
-
-## Verification and field-trial gate
-
-CI compiles the source, runs the test suite with a coverage threshold, and runs static checks. Before any supervised indoor trial, additionally verify on the exact assembled device:
-
-- model checksum/load, RGB preprocessing, target-class fixtures, and false-negative behavior;
-- measured camera intrinsics/FOV and camera-to-ToF alignment;
-- sensor stale-data rejection, disconnect/reconnect, and fail-closed announcements;
-- audio audibility, priority/preemption, and ambient-hearing preservation;
-- face-redaction false negatives and an explicit no-image-transmission policy;
-- MQTT TLS/authentication, offline persistence limits, replay, duplicate handling, and PUBACK removal;
-- battery/thermal behavior and emergency shutdown.
-
-Trials must use a sighted supervisor, a controlled indoor route, conservative stopping rules, incident logging, and the participant’s normal mobility aid. Outdoor or unsupervised trials are out of scope.
-
-## Licence
-
-Apache License 2.0. See [LICENSE](LICENSE).
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

@@ -1,429 +1,323 @@
-# Drishti: Troubleshooting Guide & Operational Diagnostic Ledger
+# Drishti: Troubleshooting Guide & Diagnostic Manual
 
-This ledger documents known failure modes, root causes, reproducible diagnostics, and permanent fixes across both development workstations and target Raspberry Pi 5 edge hardware.
+This manual documents known failure modes, root causes, diagnostic procedures, and permanent solutions across development workstations and target Raspberry Pi 5 hardware.
 
-Last reviewed: 2026-11-08. For current architecture, measured latency and the ordered backlog, also read [`docs/CURRENT_SYSTEM.md`](docs/CURRENT_SYSTEM.md), [`docs/LATENCY.md`](docs/LATENCY.md), and [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md).
-
----
-
-## 1. Hardware & Physical Sensor Layer
-
-### 1.1 Camera Subsystem: CSI-2 / V4L2 Device Failures
-
-#### Symptom: `Camera index out of range` or `/dev/video0: Device or resource busy`
-- **Root Cause**:
-  1. Another daemon (such as `libcamera-vid`, `motion`, or a dangling OpenCV background process) has locked the V4L2 file descriptor.
-  2. On Raspberry Pi 5, Camera Module 3 requires `libcamera` backend drivers. Standard legacy V4L2 calls fail if `camera_auto_detect=1` in `/boot/firmware/config.txt` is not active or if the ribbon cable is misaligned.
-- **Diagnostic Command**:
-  ```bash
-  # Check if video devices exist
-  ls -la /dev/video*
-  # Identify process holding the file descriptor
-  fuser -v /dev/video* || lsof /dev/video0
-  # On Raspberry Pi 5: verify sensor detection via libcamera
-  rpicam-hello --list-cameras
-  ```
-- **Fix**:
-  1. Kill orphaned streaming processes: `kill -9 $(fuser /dev/video0 2>/dev/null)`
-  2. For Raspberry Pi 5, verify physical orientation: the blue tape on the 15-pin FFC ribbon cable must face towards the Ethernet/USB ports. Ensure `dtoverlay=imx708` is loaded.
-  3. Production mode reports `CAMERA_UNAVAILABLE` and suppresses navigation output. Synthetic fallback exists only in explicit simulation mode.
----
-
-### 1.2 I2C Bus & VL53L1X ToF Sensor Failures
-
-#### Symptom: `OSError: [Errno 121] Remote I/O error` or `Sensor not found at 0x29`
-- **Root Cause**:
-  1. Loose physical wiring on SDA (GPIO 2) or SCL (GPIO 3).
-  2. I2C clock stretching timeout: the default 100 kHz bus clock can experience transmission errors if the ribbon cable exceeds 15 cm without pull-up resistors (Raspberry Pi internal pull-ups are 1.8 kΩ to 3.3V).
-  3. Hardware bus lockup: the sensor was interrupted mid-byte, leaving the SDA line clamped low.
-- **Diagnostic Command**:
-  ```bash
-  # Scan I2C bus 1 for the default VL53L1X address (0x29)
-  i2cdetect -y 1
-  ```
-- **Fix**:
-  1. If `0x29` does not appear, power cycle the 3.3V rail (Pin 1) or run an I2C clock unwedge sequence (toggling SCL 9 times to force the slave to release SDA).
-  2. In production, an absent or stale distance sensor reports `RANGE_UNAVAILABLE`; it never substitutes synthetic range. Use `--hardware synthetic` only for labeled simulation.
+Last updated: 2026-11-09.
 
 ---
 
-### 1.3 ESP32 VL53L0X Ranging Lockup (`status: 254`, `raw: 65535` or Ranging Halts)
+## 1. Quick Diagnostic Decision Matrix
 
-#### Symptom: Sensor link connects, but samples show `status=254`, `raw=65535`, or streaming rate drops from 33 Hz to 10 Hz
-- **Root Cause**:
-  1. ST Microelectronics VL53L0X long-range profile (`PreRange=18`, `FinalRange=14`) requires at least a **33 ms** measurement timing budget. If configured with $\le 20 \text{ ms}$, the internal sequencer timeouts exceed the budget and cause silent ranging errors.
-  2. Pololu's `readRangeContinuousMillimeters()` returns `65535` upon timeout *without clearing the hardware interrupt register*. This leaves the sensor state machine in an uncleared interrupt state, permanently latching all future reads into timeout.
-- **Diagnostic Command**:
-  ```bash
-  # Probe sensor link and inspect status flags
-  python3 scripts/probe_esp32.py --duration 5
-  # Or observe live dynamic gauge
-  python3 scripts/monitor_tof.py
-  ```
-- **Fix**:
-  1. Set `TIMING_BUDGET_MS = 33` in `firmware/drishti_tof/drishti_tof.ino`.
-  2. Add active interrupt recovery in firmware: if `sensor.timeoutOccurred()`, explicitly write `0x01` to `SYSTEM_INTERRUPT_CLEAR (0x0B)` over I2C.
-  3. Lower the return signal rate limit to `0.10 MCPS` for reliable target acquisition up to 2.0 m.
-
----
-
-### 1.4 Tactile Push Buttons Stuck Active (`buttonMask = 3` or Continuous Press)
-
-#### Symptom: Probe reports `>>> button 1 pressed` and `button 2 pressed` constantly without physical contact
-- **Root Cause**:
-  Standard 6x6 mm 4-pin tactile switches have internal connection pairs across two opposite sides. Inserting the switch rotated by $90^\circ$ across the breadboard trench bridges GPIO directly to the GND rail permanently, pulling the active-low input to `0V`.
-- **Diagnostic Command**:
-  ```bash
-  python3 scripts/probe_esp32.py --duration 3
-  # Inspect 'buttonMask': if 3 (binary 11), both inputs are shorted to ground
-  ```
-- **Fix**:
-  1. Rotate the push button $90^\circ$ so that the internally tied leg pairs straddle the breadboard center trench, leaving the circuit open until pressed.
-  2. Ensure inputs are configured as `pinMode(pin, INPUT_PULLUP)` with 30 ms debouncing.
-
----
-
-### 1.5 YOLOv8 ONNX Coordinate Denormalization & Clamping
-
-#### Symptom: YOLO detections trigger internally, but bounding boxes appear compressed to `0x0` pixels or `[0, 1]` on the HUD
-- **Root Cause**:
-  Some exported YOLOv8 ONNX models output normalized coordinates $[x, y, w, h] \in [0.0, 1.0]$ rather than absolute pixel coordinates $[0, 640]$. If the post-processing parser naively treats normalized coordinates as pixels and clamps them, bounding boxes collapse into degenerate $1 \times 1$ pixel boxes.
-- **Diagnostic Command**:
-  ```bash
-  python3 -m pytest tests/unit/test_detector.py -k "test_parse_onnx_outputs" -v
-  ```
-- **Fix**:
-  `perception/detector.py` uses adaptive denormalization: if $x_{max} \le 1.05$, the detector scales coordinates by original image dimensions $(W_{orig}, H_{orig})$ before clamping and filters out degenerate boxes ($\le 2 \text{ px}$).
-
----
-
-### 1.6 Camera Auto-Exposure Warmup False Monochrome Warning
-
-#### Symptom: `_probe_opencv_cameras` logs `warning: camera index 0 is monochrome` on colour webcams
-- **Root Cause**:
-  Initial frames from USB webcams during hardware auto-exposure and white-balance initialization often have minimal chrominance deviation ($\sigma_{color} < 3.0$), causing premature classification as monochrome.
-- **Fix**:
-  `hal/camera.py` includes a 3-frame warmup buffer in `_probe_opencv_cameras` to allow sensor AGC/AWB to stabilize before checking channel divergence.
-
----
-
-## 2. Audio Subsystem & Spatial Cues
-
-### 2.1 ALSA / PulseAudio Buffer Underrun (`xrun`)
-
-#### Symptom: Audio pops, clicking artifacts, or `ALSA lib pcm.c: underrun occurred`
-- **Root Cause**:
-  The audio synthesis thread is being starved by heavy computer vision matrix operations executing on the same CPU cores, causing ALSA playback buffers to starve.
-- **Diagnostic Command**:
-  ```bash
-  # Inspect system audio cards
-  aplay -l
-  # Monitor real-time scheduling priority and thread latency
-  chrt -p $(pgrep -f "drishti")
-  ```
-- **Fix**:
-  1. The current `ALSAAudioSink` already uses a non-blocking worker and a bounded queue of four items; when full, it drops the oldest queued item.
-  2. Measure enqueue-to-device-callback latency before changing buffer sizes. A larger buffer reduces underruns but increases warning latency.
-  3. The current synthesizer computes fractional delay/ITD/ILD waveforms in NumPy; it does not use a precomputed HRTF/ITD lookup table.
-  4. Critical preemption is still P0 work: urgent ToF output must explicitly use critical priority and flush/interrupt lower-priority speech and PCM.
-
----
-
-### 2.2 ALSA Device Direct Selection (`audio open error: Host is down`)
-
-#### Symptom: `aplay -D default` fails with `audio open error: Host is down`
-- **Root Cause**:
-  On modern Linux desktops running PipeWire or PulseAudio, routing audio through `default` requires connecting to the user's active session daemon socket. If executed from background daemons or containers lacking session variables, the virtual sound server connection is refused.
-- **Diagnostic Command**:
-  ```bash
-  # List physical playback cards and subdevices
-  aplay -l
-  ```
-- **Fix**:
-  1. Target the physical card and device directly using the hardware plugin interface:
-     ```bash
-     aplay -D plughw:1,0 -r 44100 -f S16_LE -c 2 test.wav
-     ```
-  2. `ALSAAudioSink` automatically defaults to `plughw:1,0` (Card 1 Device 0) with automatic sample-rate resampling.
-
----
-
-### 2.3 Online Vision Narration Timing and Internet Latency
-
-#### Symptom: narration takes longer than expected or fails with offline speech
-
-- **Current Architecture**: Visual scene narration is serviced asynchronously by `OnlineVisionService` (cloud OpenAI GPT-4o-mini or Gemini 2.5 Flash), keeping the fast perception stream (<35 ms) 100% offline.
-- **Fail-Closed Behavior**: If internet access is unavailable or drops, Drishti immediately announces *"Internet unavailable. Scene description is unavailable. Obstacle guidance remains active."* Obstacle sonification never pauses.
-- **Safe usage**: Narration is purely context-descriptive and never provides directional or movement advice. Local ToF/YOLO warnings remain authoritative.
-
----
-
-## 3. Deep Learning Runtime & Quantization
-
-### 3.1 ONNX Runtime Execution Provider Mismatch
-
-#### Symptom: Slow inference ($>300 \text{ ms}$) on host PC with NVIDIA GPU
-- **Root Cause**:
-  `onnxruntime` standard package was installed instead of `onnxruntime-gpu`, or CUDA/cuDNN shared libraries (`libcudnn.so`, `libcublas.so`) are missing from `LD_LIBRARY_PATH`.
-- **Diagnostic Command**:
-  ```python
-  import onnxruntime as ort
-  print("Available Providers:", ort.get_available_providers())
-  ```
-- **Fix**:
-  1. Install `onnxruntime-gpu` and verify `CUDAExecutionProvider` is in the returned list.
-  2. The current detector negotiates available ONNX Runtime providers in this order: `CUDAExecutionProvider`, then `CPUExecutionProvider`. Hailo/TensorRT support is not implemented in this repository.
-
----
-
-### 3.2 INT8 Quantization Clamping / Accuracy Degradation
-
-#### Symptom: False positive detections or missed obstacles after INT8 conversion
-- **Root Cause**:
-  Poor calibration dataset distribution during Post-Training Quantization (PTQ). If the calibration set does not capture varied indoor/outdoor luminance distributions, dynamic activation ranges are clipped, causing small obstacles to drop below the confidence threshold.
-- **Fix**:
-  1. Use KL divergence calibration (Entropy calibration) rather than MinMax calibration for activations.
-  2. Re-select thresholds from the held-out wearable dataset with critical-hazard recall as the primary constraint. The current COCO model supports `person` and `chair`; it does not contain `door` or `stairs` labels.
-
----
-
-### 3.3 NumPy Scalar Boolean Comparison (`np.False_ is False`)
-
-#### Symptom: Unit tests fail on assertions like `assert fuser.is_in_tof_cone(...) is False`
-- **Root Cause**:
-  In Python, the `is` keyword tests for memory object identity against the built-in `False` singleton. NumPy boolean operations return scalar instances of type `numpy.bool_` (`np.False_`), which do not share memory identity with Python's built-in `False`.
-- **Diagnostic & Fix**:
-  1. In module returns, always cast boolean logic expressions to standard Python `bool`:
-     ```python
-     return bool(overlap_left <= overlap_right)
-     ```
-  2. In test assertions, use equality (`== False`) or truthiness checking (`assert not result`) rather than singleton identity (`is False`).
-
----
-
-### 3.4 Subdirectory Script Execution (`ModuleNotFoundError: No module named 'hal'`)
-
-#### Symptom: Invoking `python3 scripts/run_phase1_perception.py` throws `ModuleNotFoundError`
-- **Root Cause**:
-  When Python executes a script directly, `sys.path[0]` is initialized to the directory containing the script (`scripts/`), rather than the project root directory. Top-level project packages (`hal`, `perception`, `cognitive`) cannot be found.
-- **Diagnostic & Fix**:
-  In all standalone runner scripts, prepend the parent repository root to `sys.path`:
-  ```python
-  import sys
-  from pathlib import Path
-  root_dir = Path(__file__).resolve().parent.parent
-  if str(root_dir) not in sys.path:
-      sys.path.insert(0, str(root_dir))
-  ```
-
----
-
-### 3.5 YOLO Bounding Box Coordinate Normalization Mismatch
-
-#### Symptom: Live camera stream detects objects but viewer displays no bounding boxes, and all distances clamp to `10.00 m` (appearing like fake or demo values)
-- **Root Cause**:
-  Certain YOLOv8 ONNX exports output normalized bounding box coordinates $[0.0, 1.0]$ rather than raw input pixel coordinates $[0, 640]$. When subtracting letterbox padding (e.g. `pad_y = 80`), unscaled fraction coordinates produce negative bounding box coordinates (e.g. $y_2 \approx -79.1$). Consequently, rectangles have zero or negative area on the debug viewer, and geometric depth prior calculations divide by a clamped $1.0\text{ px}$ height ($Z = (f_y \cdot H) / 1.0 \approx 850\text{ m}$), saturating at the maximum distance clamp ($10.00\text{ m}$).
-- **Diagnostic Command**:
-  ```python
-  import numpy as np
-  import onnxruntime as ort
-  session = ort.InferenceSession("models/yolov8n.onnx")
-  out = session.run(None, {session.get_inputs()[0].name: np.zeros((1, 3, 640, 640), dtype=np.float32)})
-  print("Box max coordinate:", np.max(out[0][0, :4, :]))
-  ```
-- **Fix**:
-  In `perception/detector.py:HeadlessObjectDetector._parse_onnx_outputs`, dynamically detect if the output bounding box tensor has normalized coordinates ($\le 1.05$) and scale coordinates by $(W_{target}, H_{target})$ before unpadding and inverse letterbox scaling. All decoded coordinates are bounded to $[0, W_{orig}]$ and $[0, H_{orig}]$ with positive area gating.
-
----
-
-## 4. Multilingual OCR & Indic Script Rendering
-
-### 4.1 Missing Indic Language Models / Ligature Glitches
-
-#### Symptom: Tesseract output returns garbled text or unmapped Unicode question marks (`???`)
-- **Root Cause**:
-  1. Language training packs `tesseract-ocr-hin`, `tesseract-ocr-tam`, `tesseract-ocr-mal` are missing from `/usr/share/tesseract-ocr/4.00/tessdata/` or `TESSDATA_PREFIX`.
-  2. Text was not normalized to Unicode NFC, causing decomposed matras to separate from consonant glyphs.
-- **Diagnostic Command**:
-  ```bash
-  # Check installed Tesseract languages
-  tesseract --list-langs
-  ```
-- **Fix**:
-  1. Install system Indic training data:
-     ```bash
-     sudo apt-get install -y tesseract-ocr-hin tesseract-ocr-tam tesseract-ocr-mal
-     ```
-  2. Normalize all extracted string outputs via `unicodedata.normalize('NFC', text)` before piping into the TTS synthesizer.
-
----
-
-### 4.2 Sentence Boundary Splitting on Decimal Metrics (`2.5 meters`)
-
-#### Symptom: Sentence count assertions fail or text fragments prematurely on numerical measurements
-- **Root Cause**:
-  Naive string splitting on periods (`text.split('.')`) matches decimal separators inside metric distance values (such as `2.5 meters`), fragmenting one sentence into two halves (`['... obstacle at 2', '5 meters to your right']`).
-- **Diagnostic & Fix**:
-  Use regex sentence boundary splitting requiring a period followed by whitespace:
-  ```python
-  import re
-  sentences = [s.strip() for s in re.split(r'\.\s+', text.rstrip('.')) if s.strip()]
-  ```
-
----
-
-### 4.3 Elimination of Spurious Heuristic Banknote Announcements
-
-#### Symptom: Legacy color/contour heuristics occasionally blurted out false banknotes when viewing shirts or walls
-- **Root Cause**:
-  Legacy HSV color histograms and aspect-ratio heuristics could be fooled by colored clothing or room lighting.
-- **Permanent Solution**:
-  Drishti replaced the offline heuristic classifier with `OnlineVisionService.identify_currency()`. The cloud multimodal vision model directly reads denominational numerals, portraits, and security threads:
-  1. **Strict Ambiguity Rejection**: If no banknote is visible, or if the note is blurred or ambiguous, the model sets `denomination: null` and `uncertain: true`, speaking *"No banknote clearly detected."*
-  2. **Tactile On-Demand Activation**: Currency reading is triggered only on explicit intent (Press `C` or Button 2 on GPIO 33).
-  3. **High-Precision Multimodal Verification**: Evaluates Mahatma Gandhi New Series ₹10, ₹20, ₹50, ₹100, ₹200, ₹500.
-
----
-
-## 5. Edge Privacy Masking & Telemetry Gateway
-
-### 5.1 Mosquitto MQTT Connection Refused or Offline Dropouts
-
-#### Symptom: `ConnectionRefusedError: [Errno 111] Connection refused` or telemetry packets not received by companion app
-- **Root Cause**:
-  1. Local Mosquitto broker daemon is not running on port 1883/8883.
-  2. Firewall blocking MQTT port or incorrect broker IP address.
-  3. Drishti operates in offline-first mode: when the broker is unavailable, telemetry uses a bounded persistent JSONL buffer (`var/telemetry-buffer.jsonl` by default), replays after reconnect, and retains QoS 1 records until PUBACK.
-- **Diagnostic Command**:
-  ```bash
-  # Check if Mosquitto broker service is active
-  systemctl status mosquitto
-  # Test local publish/subscribe
-  mosquitto_sub -t "drishti/test" &
-  mosquitto_pub -t "drishti/test" -m "ping"
-  ```
-- **Fix**:
-  1. Start the local Mosquitto daemon: `sudo systemctl start mosquitto`.
-  2. Drishti's `TelemetryClient` (`safety/telemetry.py`) catches connection exceptions gracefully, buffering heartbeat and alert payloads in memory (`buffered_telemetry`) so navigational perception is never interrupted by cellular dropouts.
-
----
-
-### 5.2 Gaussian Kernel Dimensionality & Border Overflow
-
-#### Symptom: `ValueError` during 2D face convolution or black borders around cropped face regions
-- **Root Cause**:
-  1. Kernel size $k$ must be odd ($k = 2m + 1$) to ensure a well-defined symmetric center pixel.
-  2. Convolving near frame boundaries ($x < k$ or $y < k$) causes index out-of-bounds if edge reflection/clamping is omitted.
-- **Diagnostic & Fix**:
-  Ensure kernel size satisfies $k = 2 \lfloor 3\sigma \rfloor + 1$ and border pixels use mirror padding (`cv2.BORDER_REFLECT` or NumPy boundary clamping) as implemented in `safety/anonymizer.py`.
-
----
-
-## 6. System Thermal & Power Throttling (Raspberry Pi 5)
-
-### 6.1 Undervoltage Warning & Frequency Throttling
-
-#### Symptom: Pipeline FPS suddenly drops from 30 FPS to 12 FPS during continuous inference
-- **Root Cause**:
-  1. Power supply cannot deliver 5V / 5A (25W) required by the Raspberry Pi 5 under combined CPU + CSI + NPU load. Standard phone chargers deliver 5V / 3A (15W), causing brownouts.
-  2. SoC thermal throttling kicks in at $80^\circ \text{C}$ ($85^\circ \text{C}$ hard cap), cutting CPU frequency from 2.4 GHz down to 1.5 GHz.
-- **Diagnostic Command**:
-  ```bash
-  # Check throttling status bitmask (0x0 means healthy)
-  vcgencmd get_throttled
-  # Measure current core temperature
-  vcgencmd measure_temp
-  ```
-- **Bitmask Reference**:
-  - `0x1`: Under-voltage detected currently
-  - `0x2`: Arm frequency capped currently
-  - `0x4`: Currently throttled
-  - `0x50000`: Under-voltage occurred in past
-  - `0x20000`: Throttling occurred in past
-- **Fix**:
-  1. Use the official Raspberry Pi 27W USB-C PD power adapter.
-  2. Ensure the active cooling fan is installed and functioning. The firmware fan curve will engage at $60^\circ \text{C}$.
-
----
-
-## 7. Diagnostic Decision Matrix
-
-```
-[System Failure Detected]
-           |
-           +---> Quick Comprehensive Diagnostic:
-           |        +---> Run: `python3 scripts/check_hardware_health.py`
-           |
-           +---> Camera stream black/empty?
-           |        +---> Check: `fuser -v /dev/video0` -> kill zombie holders
-           |        +---> Check: Camera Module 3 ribbon polarity -> blue tape to ports
-           |        +---> Production: NOT READY; simulation: labeled test pattern
-           |
-           +---> Distance always reports 0 or timeout?
-           |        +---> Check: `i2cdetect -y 1` -> verify address 0x29
-           |        +---> Check: I2C wiring (SDA Pin 3, SCL Pin 5)
-           |        +---> Production: NOT READY; geometric priors are not physical ToF
-           |
-           +---> Audio stuttering or high latency?
-           |        +---> Check: CPU core saturation -> isolate audio to dedicated core
-           |        +---> Check: Buffer size -> increase to 1024 frames
-           |
-           +---> Low inference FPS (<15 FPS on Pi 5)?
-                    +---> Check: `vcgencmd get_throttled` -> check power adapter (needs 5V/5A)
-                    +---> Check: Verify INT8 model is loaded rather than FP32
+```text
+[System Issue Encountered]
+         │
+         ├──► Console prints "NAVIGATION NOT READY"?
+         │       └──► See Section 2.1: Fail-Closed Safety Readiness Diagnostics
+         │
+         ├──► Book / Text Reading returns "No clear text detected"?
+         │       └──► See Section 3.1: Anonymizer False-Positive Blur on Documents & Currency
+         │
+         ├──► Hearing "Unclassified obstacle" after pressing a button?
+         │       └──► See Section 3.2: Distinguishing 30 FPS Local Sonar from Cloud Vision
+         │
+         ├──► Cloud Vision queries take >15 seconds or time out?
+         │       └──► See Section 3.3: Gemini Vision API Latency & Thinking Budget
+         │
+         ├──► Buttons appear permanently pressed or stuck?
+         │       └──► See Section 4.1: Tactile Switch 90-Degree Breadboard Rotation
+         │
+         ├──► ESP32 Serial Link missing or timeouts?
+         │       └──► See Section 4.2: ESP32 USB-Serial & Permission Diagnostics
+         │
+         ├──► Audio stuttering, pops, or underruns?
+         │       └──► See Section 5.1: ALSA Audio Buffer Underruns (xrun)
+         │
+         └──► Camera unavailable or busy?
+                 └──► See Section 6.1: Video Device Locks & Permissions
 ```
 
 ---
 
-## 8. Automated Diagnostics & Configuration Recovery
+## 2. Safety Readiness & Fail-Closed Navigation
 
-### 8.1 Non-Destructive Hardware Health Check
-Run the automated peripheral audit tool to verify cameras, I2C range sensors, ALSA sound devices, and ONNX runtime environments:
+### 2.1 Navigational State Stuck in `NAVIGATION NOT READY`
+#### Symptoms:
+- The terminal displays:
+  ```text
+  Cycle 1     | NAVIGATION NOT READY | CALIBRATION_UNVERIFIED, RANGE_NO_VALID_SAMPLE
+  ```
+- No binaural obstacle pings are emitted, even when objects are in front of the camera.
+- Debug viewer displays status: `NAV NOT READY: UNKNOWN`.
+
+#### Root Cause:
+Drishti enforces an uncompromising **fail-closed** safety standard. Navigational spatial pings are synthesized *only* when physical sensors are authoritative. Inferred-distance audio pings (from 2D YOLO bounding box priors) are strictly suppressed if physical ToF range is missing, stale, or unverified.
+
+#### Diagnostic Checklist:
+1. **Check Physical ToF Connection**:
+   ```bash
+   python3 scripts/probe_esp32.py --port auto --duration 5
+   ```
+   If no samples arrive, the serial link is disconnected or the sensor is unpowered.
+2. **Inspect Readiness Diagnostic Codes**:
+   - `RANGE_NO_VALID_SAMPLE`: The ESP32 is disconnected, unpowered, or has not sent a valid range packet within $100\text{ ms}$.
+   - `CALIBRATION_UNVERIFIED`: Camera FOV and optical-to-ToF baseline measurements have not been confirmed in `config/pipeline_config.yaml`.
+   - `CAMERA_UNAVAILABLE`: Physical camera is not returning frames.
+   - `MODEL_CONTRACT_INVALID`: `models/yolov8n.onnx` is missing or corrupted.
+
+#### Resolution:
+- For development testing where physical ToF is absent, run explicit simulation:
+  ```bash
+  python3 scripts/run_live_wearable.py --hardware synthetic
+  ```
+- For production operation with hardware, verify the ESP32 USB cable is plugged in and recognized under `/dev/serial/by-id/`.
+
+---
+
+## 3. Visual Cognition & Edge Privacy Subsystem
+
+### 3.1 Document & Banknote Blurring (False-Positive Anonymization)
+#### Symptoms:
+- Holding a book or document in front of the camera and pressing **Button 3 (Text Reading)** results in:
+  ```text
+  >>> [TEXT READING] Spoken: "No clear text detected."
+  ```
+- Holding a banknote and pressing **Button 2 (Currency Identification)** results in:
+  ```text
+  >>> [CURRENCY] Spoken: "No banknote clearly detected."
+  ```
+- Debug viewer snapshot reveals the book or banknote is Gaussian-blurred across the entire page.
+
+#### Root Cause:
+1. **Synthetic Face Detection Heuristic Collision**: In earlier revisions, `safety/anonymizer.py` contained a color heuristic (`mask = (B > 150) & (G > 180) & (R > 220)`) intended for synthetic simulation markers. Because white book pages, paper, and bright currency notes contain high BGR values, the heuristic flagged the entire document as a "face" `(0, 0, 640, 480)` and blurred the entire frame prior to upload.
+2. **License Plate Cascade False Positives**: OpenCV's `haarcascade_russian_plate_number.xml` was running over every frame, detecting printed lines of text on books and documents as license plates and blurring each line.
+
+#### Verification & Fix (Implemented in `aa55387`):
+1. **Synthetic Marker Scoping**: The synthetic color marker heuristic is now strictly guarded by the background signature of `SyntheticCameraSource` (`frame[0, 0, 1] == 40 and frame[0, 0, 2] == 40`). Real webcam images never trigger this heuristic.
+2. **Plate Cascade Scoping**: License plate detection executes **only** when YOLO detects an actual vehicle (`car`, `bus`, `truck`, `motorcycle`) and only searches within the vehicle bounding box.
+3. **Verify with Regression Test**:
+   ```bash
+   python3 -m pytest tests/unit/test_anonymizer.py -k "test_anonymizer_does_not_blur_text"
+   ```
+
+---
+
+### 3.2 Mistaking 30 FPS Obstacle Sonar for Button Response
+#### Symptoms:
+- The user holds a book or document close to the camera, presses Button 3 for text reading, and immediately hears:
+  ```text
+  "Caution: unclassified obstacle 0.4 meters ahead"
+  ```
+- The terminal displays:
+  ```text
+  Cycle 42    | unclassified obstacle | 0.38 m   | +0.0°   | 3D: [+0.00, +0.00, 0.38]
+  ```
+- The user believes the text reading model misclassified their book as an "unclassified object."
+
+#### Explanation:
+Drishti runs two distinct perception streams simultaneously:
+1. **Fast Perception Stream (30 FPS, Local Edge)**: Continuously evaluates the ToF laser sensor. When any object is held $<0.8\text{ m}$ from the sensor, it immediately alerts the user of a physical obstruction in their walking path. Because a close-up book or hand is not a standard YOLO hazard (person/car/chair), it is labeled `unclassified obstacle`.
+2. **Cognitive Vision Stream (~1.5 s, Cloud Multimodal)**: Asynchronously triggered by the physical button.
+
+#### Resolution & Operation:
+- When you press a button, notice the instant audio and console confirmation:
+  ```text
+  >>> [BUTTON 3 PRESSED] Multilingual Text Reading queued for Gemini Vision...
+  Audio Prompt: "Reading text..."
+  ```
+- Approximately 1.5 seconds later, the cloud vision response will arrive and be spoken:
+  ```text
+  >>> [TEXT READING] Spoken: "Chapter 1: Artificial Intelligence and Neural Networks"
+  ```
+- Maintain the reading material at a natural distance ($25\text{--}40\text{ cm}$) with adequate lighting.
+
+---
+
+### 3.3 Gemini API Latency & Thinking Budget Overheads
+#### Symptoms:
+- Scene narration, currency, or OCR takes 15 to 25 seconds to speak after pressing a button.
+- Cognitive requests time out with network exceptions.
+
+#### Root Cause:
+Google's Gemini 3.1 Flash-Lite and 2.5 Flash reasoning models allocate an internal "thinking budget" by default, generating multi-step internal reasoning tokens before outputting the final JSON response.
+
+#### Permanent Fix:
+In `cognitive/online_vision.py`, `generationConfig` sets `thinkingBudget` to `0`:
+```python
+"generationConfig": {
+    "temperature": 0.0,
+    "maxOutputTokens": 300,
+    "thinkingConfig": {
+        "thinkingBudget": 0
+    }
+}
+```
+This forces immediate single-turn inference, dropping end-to-end response times from $>20\text{ s}$ to **$1.5\text{--}1.8\text{ s}$**.
+
+---
+
+### 3.4 Ineffective Custom Transport / IPv4 Adapter on Requests 2.32+
+#### Symptoms:
+- Runtime warnings or `TypeError: create_connection() missing required argument 'timeout'` in modern virtualenvs.
+
+#### Root Cause:
+Requests 2.32+ routes HTTPS requests through `get_connection_with_tls_context`, bypassing legacy `get_connection()` overrides in custom `HTTPAdapter` subclasses.
+
+#### Permanent Fix:
+`OnlineVisionService` utilizes standard `requests.Session()` with clean connection pooling, native DNS resolution, and explicit timeouts ($5.0\text{ s}$ connect, $15.0\text{ s}$ read).
+
+---
+
+## 4. Hardware Sensors & ESP32 Serial Link
+
+### 4.1 Tactile Switches Stuck Active (`buttonMask = 7` or Continuous Press)
+#### Symptoms:
+- Probing the ESP32 reports constant button presses without physical contact:
+  ```text
+  >>> [BUTTON EVENT] Button 1 Pressed: Scene Narration queued...
+  ```
+- Probe output shows `buttonMask: 7` (binary `111`).
+
+#### Root Cause:
+Standard 4-pin 6×6 mm tactile switches have internally connected leg pairs on opposite sides. Inserting the switch rotated by $90^\circ$ across the breadboard center trench connects GPIO directly to the GND rail permanently, pulling the active-LOW input to ground ($0\text{ V}$).
+
+#### Diagnostic:
+```bash
+python3 scripts/probe_esp32.py --port auto --duration 3
+```
+Inspect the displayed `buttonMask`. In the idle state, `buttonMask` must equal `0`.
+
+#### Resolution:
+1. Rotate each push button $90^\circ$ so that the tied leg pairs straddle the center breadboard trench.
+2. Confirm the wiring: one leg to GPIO (`GPIO32`, `GPIO33`, `GPIO25`), the opposite leg to the common `GND` rail.
+
+---
+
+### 4.2 ESP32 USB-Serial Permission & Port Identification
+#### Symptoms:
+- `PermissionError: [Errno 13] Permission denied: '/dev/ttyUSB0'`
+- `ESP32 serial: no frames (timeout; check USB cable/port)`
+
+#### Root Cause:
+1. Current Linux user is not a member of the `dialout` group.
+2. Micro-USB cable is a charge-only cable lacking data D+/D- lines.
+
+#### Resolution:
+1. Add user to `dialout` group and refresh permissions:
+   ```bash
+   sudo usermod -aG dialout "$USER"
+   newgrp dialout
+   ```
+2. Verify kernel USB enumeration:
+   ```bash
+   ls -la /dev/serial/by-id/
+   dmesg | grep -E "ttyUSB|ttyACM|CP210|ch341"
+   ```
+3. Target the stable `/dev/serial/by-id/` path when launching:
+   ```bash
+   python3 scripts/run_live_wearable.py --serial-port /dev/serial/by-id/usb-Silicon_Labs_CP2102...
+   ```
+
+---
+
+### 4.3 ESP32 VL53L0X Ranging Lockup (`status: 254`, `raw: 65535`)
+#### Symptoms:
+- The ESP32 streams data, but reported distance is locked at `8190 mm` or `raw: 65535`, with status `254`.
+
+#### Root Cause:
+ST Microelectronics VL53L0X long-range profile requires a **33 ms** measurement timing budget. If Pololu's continuous ranging mode encounters a hardware timeout, the internal interrupt register is left uncleared, latching all future reads into timeout state.
+
+#### Resolution (Implemented in Firmware):
+1. In `firmware/drishti_tof/drishti_tof.ino`, `TIMING_BUDGET_MS` is set to `33`.
+2. Firmware auto-clears interrupt status: if `sensor.timeoutOccurred()`, it explicitly writes `0x01` to `SYSTEM_INTERRUPT_CLEAR (0x0B)` over I²C.
+3. Flash the verified firmware using PlatformIO:
+   ```bash
+   cd firmware/drishti_tof
+   pio run -t upload
+   ```
+
+---
+
+## 5. Audio Playback & ALSA Infrastructure
+
+### 5.1 ALSA Buffer Underruns (`xrun`) & Audio Stutter
+#### Symptoms:
+- Crackling, popping, or console warnings:
+  ```text
+  ALSA lib pcm.c: underrun occurred
+  ```
+
+#### Root Cause:
+The real-time computer vision loop (YOLO inference on CPU) saturates all CPU cores, starving the audio playback thread of time slices needed to feed the sound card DMA buffer.
+
+#### Resolution:
+1. `ALSAAudioSink` utilizes a bounded queue of four PCM frames; if full, stale ambient pings are dropped to prevent latency accumulation.
+2. Ensure the process is granted standard scheduling priority:
+   ```bash
+   # Check real-time thread priority
+   chrt -p $(pgrep -f "run_live_wearable")
+   ```
+3. If running over Bluetooth headphones (e.g. JBL TUNE500BT), verify PipeWire/PulseAudio is using A2DP codec without packet dropouts.
+
+---
+
+### 5.2 Direct Hardware Audio Routing (`Host is down`)
+#### Symptoms:
+- `audio open error: Host is down` when opening `default` ALSA PCM.
+
+#### Root Cause:
+Running from background daemons or SSH sessions without active PulseAudio/PipeWire user session sockets.
+
+#### Resolution:
+Target the physical ALSA card directly via hardware plug:
+```bash
+aplay -l
+# Specify card and device index directly in configuration:
+export DRISHTI_AUDIO_DEVICE="plughw:1,0"
+```
+
+---
+
+## 6. Camera Subsystem & V4L2
+
+### 6.1 Camera Device Busy or Locked
+#### Symptoms:
+- `cv2.error: OpenCV(4.x) Can't open camera by index 0`
+- `/dev/video0: Device or resource busy`
+
+#### Root Cause:
+A previous background python session, motion daemon, or browser tab holds an open file descriptor on `/dev/video0`.
+
+#### Resolution:
+Identify and kill the blocking process:
+```bash
+# Locate holding process PID
+sudo fuser -v /dev/video0
+# Terminate orphaned process
+sudo fuser -k /dev/video0
+```
+
+---
+
+## 7. Automated System Health Check
+
+Run the comprehensive non-destructive peripheral audit script before deploying the system:
 ```bash
 python3 scripts/check_hardware_health.py
 ```
-- **Exit Code 0**: All hardware peripherals and neural weights verified operational.
-- **Exit Code 1**: One or more critical subsystems absent; review the displayed diagnostic checklist.
 
-### 8.2 Configuration Schema Validation (`ConfigValidationError`)
-When editing `config/pipeline_config.yaml`, `config/hardware_dev.yaml`, or `config/hardware_pi5.yaml`:
-- **Symptom**: `ConfigValidationError: Invalid pipeline.target_fps: -5 (must be in 1..120)`
-- **Root Cause**: A numerical threshold or peripheral backend was configured outside valid physical limits.
-- **Remediation**:
-  1. Ensure `confidence_threshold` is between `0.0` and `1.0`.
-  2. Ensure `frame_width` and `frame_height` are positive integers.
-  3. Ensure camera backend is one of `synthetic`, `opencv`, `v4l2`, `libcamera`, or `auto`.
-
-### 8.3 Neural Model Integrity & SHA-256 Checksums
-- **Symptom**: `[!] FAILED: The following required models could not be verified: yolov8n.onnx`
-- **Root Cause**: Download was truncated or tampered with, failing SHA-256 integrity verification.
-- **Remediation**:
-  Re-run `python3 scripts/download_models.py`. The downloader automatically queries redundant mirrors (`yakhyo/people-tracker`, `CVHub520/X-AnyLabeling`) and validates against official SHA-256 checksums before installing.
-
-### 8.4 Enabling Structured Verbose Debug Logs
-To diagnose runtime exceptions or trace sub-millisecond perception loops:
-```bash
-export DRISHTI_LOG_LEVEL=DEBUG
-python3 scripts/run_live_wearable.py --hardware laptop
+### Expected Output for Healthy System:
+```text
+================================================================================
+                    DRISHTI HARDWARE & SUBSYSTEM HEALTH CHECK
+================================================================================
+[✓] Camera Subsystem: OpenCV backend acquired device index 0 (640x480 @ 30 FPS).
+[✓] ESP32 Link: Connected on /dev/serial/by-id/... (Firmware 1.0.0, 33 Hz).
+[✓] ToF Sensor: VL53L0X healthy (Live Range: 842 mm).
+[✓] Tactile Inputs: Buttons verified idle (Mask: 0).
+[✓] Neural Weights: YOLOv8n ONNX model verified (models/yolov8n.onnx).
+[✓] Speech Engine: Piper neural voice verified (models/piper/en_US-lessac-medium.onnx).
+[✓] Vision API: Gemini credentials active and provider online.
+================================================================================
+  >>> ALL CRITICAL SUBSYSTEMS OPERATIONAL: READY FOR LIVE SYSTEM RUNNER <<<
+================================================================================
 ```
-All subsystems emit ISO-timestamped log records under the `drishti.*` namespace.
-
-### 8.5 ESP32 USB-Serial Sensor Link & PTY Troubleshooting
-- **Symptom**: `ESP32 serial: no frames (timeout; check USB cable/port)`
-- **Remediation**:
-  1. Check device permissions: ensure your user belongs to the `dialout` group (`sudo usermod -a -G dialout $USER`).
-  2. Verify cable capability: many thin USB cables are charge-only. Use a data-sync USB cable.
-  3. Probe with the dedicated diagnostic CLI:
-     ```bash
-     python3 scripts/probe_esp32.py --port auto --duration 5
-     ```
-  4. Testing without physical ESP32: Launch the virtual PTY emulator in a background terminal:
-     ```bash
-     python3 tools/fake_esp32.py --link /tmp/drishti-tof
-     python3 scripts/run_live_wearable.py --hardware laptop --serial-port /tmp/drishti-tof
-     ```
-
-### 8.6 Headless Debug Browser Viewer
-- **Usage**: Add `--viewer` to any runner invocation (`python3 scripts/run_live_wearable.py --hardware laptop --viewer`).
-- **Endpoint**: Open `http://127.0.0.1:8080/` in Chrome/Firefox to view the latest annotated MJPEG frames, YOLO boxes, labels, range source, and ToF spot. The configured 30 FPS is a target, not a measured viewer guarantee.
-- **Port Conflict**: Change the port via `--viewer-port 8081` if port 8080 is bound by another service.

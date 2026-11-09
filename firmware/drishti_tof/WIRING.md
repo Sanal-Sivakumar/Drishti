@@ -17,7 +17,7 @@ Inputs: **3 momentary push buttons** to ground
 |----:|------|-------|
 | 1 | ESP32 DevKit V1 | CP2102 or CH340 USB-UART |
 | 1 | VL53L0X breakout | 4-pin: VIN, GND, SDA, SCL (some label VCC/VDD) |
-| 2 | Momentary push buttons | 4-leg tactile switches |
+| 3 | Momentary push buttons | 4-leg tactile switches (Buttons 1, 2, 3) |
 | 1 | Breadboard | 830-point, with power rails |
 | — | Jumper wires | red / black / blue / yellow / green |
 | 1 | USB **data** cable | Charge-only cables will not enumerate |
@@ -67,6 +67,7 @@ Leave **GPIO1** on the VL53L0X unconnected.
                │                │                   │ GPIO1   (nc)   │
  GPIO32  ●──[BTN1]──GND         │                   └────────────────┘
  GPIO33  ●──[BTN2]──GND         │
+ GPIO25  ●──[BTN3]──GND         │
                │  USB ●─────────┼──── laptop  →  /dev/ttyUSB0
                └────────────────┘
 ```
@@ -74,13 +75,13 @@ Leave **GPIO1** on the VL53L0X unconnected.
 Button wiring, seen from above:
 
 ```
-   GPIO32 ●──────┐                 GPIO33 ●──────┐
-                 │                                 │
-              ┌──┴──┐                           ┌──┴──┐
-              │ BTN │  one leg to GPIO          │ BTN │
-              └──┬──┘  other leg to GND         └──┬──┘
-                 │                                 │
-   GND rail ●────┘                 GND rail ●──────┘
+   GPIO32 ●──────┐       GPIO33 ●──────┐       GPIO25 ●──────┐
+                 │                     │                     │
+              ┌──┴──┐               ┌──┴──┐               ┌──┴──┐
+              │ BTN1│               │ BTN2│               │ BTN3│
+              └──┬──┘               └──┬──┘               └──┬──┘
+                 │                     │                     │
+   GND rail ●────┘       GND rail ●────┘       GND rail ●────┘
 ```
 
 ---
@@ -101,8 +102,8 @@ Button wiring, seen from above:
    `3V3 → VIN`, `GND → GND`, `GPIO21 → SDA`, `GPIO22 → SCL`.
 7. **Tie XSHUT high** with a short red jumper from the sensor's XSHUT to the
    3V3 rail.
-8. **Place the two buttons** across the centre channel, below the ESP32.
-9. **Wire each button**: one leg to `GPIO32` / `GPIO33`, the other leg to the
+8. **Place the three buttons** across the centre channel, below the ESP32.
+9. **Wire each button**: one leg to `GPIO32` / `GPIO33` / `GPIO25`, the other leg to the
    ground rail. Do not share the GPIO row with anything else.
 10. **Inspect before powering:** no red wire touching a black rail, no jumper
     in the ESP32's USB end, sensor VIN on 3V3 (not VIN/5V).
